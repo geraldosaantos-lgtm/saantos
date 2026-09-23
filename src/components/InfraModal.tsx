@@ -728,12 +728,12 @@ CREATE TABLE service_launches (
                   </span>
                 </h5>
                 <p className="text-[11px] text-neutral-600">
-                  Repositório: <code className="bg-neutral-100 px-1 py-0.5 rounded font-mono text-neutral-900 font-bold">geraldosaantos-lgtm/saantos-facilite</code>
+                  Repositório: <code className="bg-neutral-100 px-1 py-0.5 rounded font-mono text-neutral-900 font-bold">geraldosaantos-lgtm/saantos</code>
                 </p>
 
                 <div className="bg-neutral-950 text-neutral-200 p-3 rounded-lg font-mono text-[11px] space-y-1.5">
                   <div className="text-neutral-400"># O repositório remoto já está configurado no projeto:</div>
-                  <div className="text-emerald-400">git remote set-url origin https://github.com/geraldosaantos-lgtm/saantos-facilite.git</div>
+                  <div className="text-emerald-400">git remote set-url origin https://github.com/geraldosaantos-lgtm/saantos.git</div>
                   <div className="text-neutral-400 pt-1"># Para enviar todos os arquivos e migrations para o seu repositório:</div>
                   <div className="text-amber-400 font-bold">git push -u origin main</div>
                 </div>
