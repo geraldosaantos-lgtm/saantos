@@ -248,29 +248,37 @@ export async function syncLaunchToSupabase(launch: ServiceLaunch): Promise<boole
   if (!supabase) return false;
 
   try {
-    const { error } = await supabase.from('service_launches').upsert(
-      {
-        id: launch.id,
-        numero_os: launch.numeroOS,
-        data_hora: launch.dataHora,
-        cliente_id: launch.clienteId || null,
-        cliente_nome: launch.clienteNome,
-        cliente_cnpj: launch.clienteCnpj,
-        placa: launch.placa,
-        modelo: launch.modelo,
-        km: String(launch.km),
-        responsavel: launch.responsavel,
-        nome_condutor: launch.nomeCondutor,
-        matricula_condutor: launch.matriculaCondutor,
-        servicos: launch.servicos,
-        valor_total: launch.valorTotal,
-        assinatura: launch.assinatura,
-        observacoes: launch.observacoes || '',
-        status: launch.status,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'id' }
-    );
+    const payload = {
+      id: launch.id,
+      numero_os: launch.numeroOS,
+      data_hora: launch.dataHora,
+      cliente_id: launch.clienteId || null,
+      cliente_nome: launch.clienteNome,
+      cliente_cnpj: launch.clienteCnpj,
+      placa: launch.placa,
+      modelo: launch.modelo,
+      km: String(launch.km),
+      responsavel: launch.responsavel,
+      nome_condutor: launch.nomeCondutor,
+      matricula_condutor: launch.matriculaCondutor,
+      servicos: launch.servicos,
+      valor_total: launch.valorTotal,
+      assinatura: launch.assinatura,
+      observacoes: launch.observacoes || '',
+      status: launch.status,
+      updated_at: new Date().toISOString(),
+    };
+
+    let { error } = await supabase.from('service_launches').upsert(payload, { onConflict: 'id' });
+
+    // Fallback: se houver falha de chave estrangeira (ex: cliente não sincronizado ainda), salva com cliente_id nulo para não perder o lançamento
+    if (error && (error.code === '23503' || error.message?.includes('foreign key'))) {
+      const retry = await supabase
+        .from('service_launches')
+        .upsert({ ...payload, cliente_id: null }, { onConflict: 'id' });
+      error = retry.error;
+    }
+
     if (error) console.error('Erro ao sincronizar lançamento no Supabase:', error);
     return !error;
   } catch (e) {

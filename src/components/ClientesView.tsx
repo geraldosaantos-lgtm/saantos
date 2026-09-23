@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Client, ServiceItem } from '../types';
 import { formatCurrency } from '../utils/storage';
+import { ConfirmModal } from './ConfirmModal';
 import {
   Users,
   Plus,
@@ -33,6 +34,7 @@ export const ClientesView: React.FC<ClientesViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [clientToDelete, setClientToDelete] = useState<Client | null>(null);
 
   // Form State
   const [formData, setFormData] = useState<{
@@ -238,11 +240,7 @@ export const ClientesView: React.FC<ClientesViewProps> = ({
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => {
-                        if (confirm(`Deseja remover o cliente ${client.nomeFantasia}?`)) {
-                          onDeleteClient(client.id);
-                        }
-                      }}
+                      onClick={() => setClientToDelete(client)}
                       title="Excluir Cliente"
                       className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
                     >
@@ -582,6 +580,26 @@ export const ClientesView: React.FC<ClientesViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal de Confirmação de Exclusão de Cliente */}
+      <ConfirmModal
+        isOpen={Boolean(clientToDelete)}
+        title="Excluir Cliente"
+        message={
+          clientToDelete
+            ? `Tem certeza que deseja remover o cliente "${clientToDelete.nomeFantasia}" (${clientToDelete.cnpj})? Suas tabelas de preços personalizadas também serão excluídas.`
+            : ''
+        }
+        confirmLabel="Sim, Excluir Cliente"
+        cancelLabel="Cancelar"
+        onConfirm={() => {
+          if (clientToDelete) {
+            onDeleteClient(clientToDelete.id);
+            setClientToDelete(null);
+          }
+        }}
+        onCancel={() => setClientToDelete(null)}
+      />
     </div>
   );
 };

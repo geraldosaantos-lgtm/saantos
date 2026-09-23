@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ServiceItem } from '../types';
 import { formatCurrency } from '../utils/storage';
+import { ConfirmModal } from './ConfirmModal';
 import {
   Wrench,
   Plus,
@@ -27,6 +28,7 @@ export const ServicosView: React.FC<ServicosViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingService, setEditingService] = useState<ServiceItem | null>(null);
+  const [serviceToDelete, setServiceToDelete] = useState<ServiceItem | null>(null);
 
   const [formData, setFormData] = useState<Omit<ServiceItem, 'id'>>({
     codigo: '',
@@ -176,11 +178,7 @@ export const ServicosView: React.FC<ServicosViewProps> = ({
                     <Edit2 className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={() => {
-                      if (confirm(`Deseja remover o serviço ${service.nome}?`)) {
-                        onDeleteService(service.id);
-                      }
-                    }}
+                    onClick={() => setServiceToDelete(service)}
                     title="Excluir Serviço"
                     className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
                   >
@@ -352,6 +350,26 @@ export const ServicosView: React.FC<ServicosViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal de Confirmação de Exclusão de Serviço */}
+      <ConfirmModal
+        isOpen={Boolean(serviceToDelete)}
+        title="Excluir Serviço"
+        message={
+          serviceToDelete
+            ? `Tem certeza que deseja excluir o serviço "${serviceToDelete.nome}" (${serviceToDelete.codigo})? Ele deixará de aparecer nas opções de novos lançamentos.`
+            : ''
+        }
+        confirmLabel="Sim, Excluir Serviço"
+        cancelLabel="Cancelar"
+        onConfirm={() => {
+          if (serviceToDelete) {
+            onDeleteService(serviceToDelete.id);
+            setServiceToDelete(null);
+          }
+        }}
+        onCancel={() => setServiceToDelete(null)}
+      />
     </div>
   );
 };

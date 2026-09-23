@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ServiceLaunch } from '../types';
 import { formatCurrency, formatDateTime } from '../utils/storage';
+import { ConfirmModal } from './ConfirmModal';
 import {
   Car,
   Plus,
@@ -30,6 +31,7 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
   const [selectedSignature, setSelectedSignature] = useState<{
     launch: ServiceLaunch;
   } | null>(null);
+  const [launchToDelete, setLaunchToDelete] = useState<ServiceLaunch | null>(null);
 
   const filtered = launches.filter((l) => {
     const term = searchTerm.toLowerCase();
@@ -160,11 +162,7 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
                 Editar
               </button>
               <button
-                onClick={() => {
-                  if (confirm(`Deseja excluir a ordem de serviço ${l.numeroOS}?`)) {
-                    onDeleteLaunch(l.id);
-                  }
-                }}
+                onClick={() => setLaunchToDelete(l)}
                 className="py-2 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg flex items-center justify-center gap-1.5 transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5 text-red-600" />
@@ -269,11 +267,7 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => {
-                          if (confirm(`Deseja excluir a ordem de serviço ${l.numeroOS}?`)) {
-                            onDeleteLaunch(l.id);
-                          }
-                        }}
+                        onClick={() => setLaunchToDelete(l)}
                         title="Excluir Lançamento"
                         className="p-1 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded"
                       >
@@ -299,6 +293,26 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal de Confirmação de Exclusão */}
+      <ConfirmModal
+        isOpen={Boolean(launchToDelete)}
+        title="Excluir Ordem de Serviço"
+        message={
+          launchToDelete
+            ? `Tem certeza que deseja excluir o lançamento #${launchToDelete.numeroOS} (${launchToDelete.placa} - ${launchToDelete.clienteNome})? Esta ação não pode ser desfeita.`
+            : ''
+        }
+        confirmLabel="Sim, Excluir"
+        cancelLabel="Cancelar"
+        onConfirm={() => {
+          if (launchToDelete) {
+            onDeleteLaunch(launchToDelete.id);
+            setLaunchToDelete(null);
+          }
+        }}
+        onCancel={() => setLaunchToDelete(null)}
+      />
 
       {/* Modal de Visualização da Assinatura Coletada */}
       {selectedSignature && (

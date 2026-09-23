@@ -347,3 +347,14 @@ export const formatPlate = (val: string): string => {
   }
   return clean;
 };
+
+// Retorna YYYY-MM-DD com base no horário local (evita bug de fuso horário UTC em viradas de dia)
+export const getLocalDateString = (d: Date | string = new Date()): string => {
+  const dateObj = typeof d === 'string' ? new Date(d) : d;
+  if (isNaN(dateObj.getTime())) return '';
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+

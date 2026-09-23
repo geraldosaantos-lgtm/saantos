@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { CompanyProfile, Client, ServiceLaunch } from '../types';
-import { formatCurrency, formatDateTime } from '../utils/storage';
+import { formatCurrency, formatDateTime, getLocalDateString } from '../utils/storage';
 import { exportReportToExcel } from '../utils/exportExcel';
 import { exportReportToPdf } from '../utils/exportPdf';
 import {
@@ -35,10 +35,8 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({
   const [selectedClientId, setSelectedClientId] = useState<string>('todos');
 
   // Período personalizado
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const firstDayOfMonthIso = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-    .toISOString()
-    .slice(0, 10);
+  const todayIso = getLocalDateString(new Date());
+  const firstDayOfMonthIso = getLocalDateString(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [customStart, setCustomStart] = useState(firstDayOfMonthIso);
   const [customEnd, setCustomEnd] = useState(todayIso);
 

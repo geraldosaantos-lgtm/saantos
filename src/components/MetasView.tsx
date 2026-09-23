@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { GoalsConfig, ServiceLaunch } from '../types';
-import { formatCurrency } from '../utils/storage';
+import { formatCurrency, getLocalDateString } from '../utils/storage';
 import { Target, TrendingUp, Calendar, Check, Edit3, DollarSign, Car } from 'lucide-react';
 
 interface MetasViewProps {
@@ -19,7 +19,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
 
   // Calcula faturamento e atendimentos atuais
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = getLocalDateString(now);
 
   // Início da semana (domingo ou segunda)
   const currentDayOfWeek = now.getDay();
@@ -39,7 +39,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
 
   launches.forEach((l) => {
     const launchDate = new Date(l.dataHora);
-    const dateStr = l.dataHora.slice(0, 10);
+    const dateStr = getLocalDateString(l.dataHora);
 
     if (dateStr === todayStr) {
       totalHoje += l.valorTotal;

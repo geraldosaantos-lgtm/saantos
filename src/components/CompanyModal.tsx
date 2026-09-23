@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CompanyProfile } from '../types';
 import { Building2, Upload, Check, AlertCircle, X, Landmark, QrCode } from 'lucide-react';
 
@@ -19,6 +19,13 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({
 }) => {
   const [formData, setFormData] = useState<CompanyProfile>({ ...company });
   const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setFormData({ ...company });
+      setErrorMsg('');
+    }
+  }, [isOpen, company]);
 
   if (!isOpen) return null;
 

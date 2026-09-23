@@ -22,7 +22,8 @@ import {
   Key,
   ShieldCheck,
   UploadCloud,
-  FileCode2
+  FileCode2,
+  AlertCircle
 } from 'lucide-react';
 
 interface InfraModalProps {
@@ -76,7 +77,10 @@ export const InfraModal: React.FC<InfraModalProps> = ({
 
   const handleSaveCredentials = async () => {
     if (!urlInput.trim() || !keyInput.trim()) {
-      alert('Preencha a URL e a chave Anon do Supabase.');
+      setTestResult({
+        success: false,
+        message: 'Preencha a URL e a chave Anon do Supabase para salvar.',
+      });
       return;
     }
     saveCustomSupabaseConfig(urlInput, keyInput);

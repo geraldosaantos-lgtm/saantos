@@ -84,8 +84,8 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
   ) => {
     if (!isDrawing) return;
-    if ('touches' in e) {
-      // Impede o scroll na tela ao assinar no celular ou tablet
+    if ('touches' in e && e.cancelable) {
+      // Impede o scroll na tela ao assinar no celular ou tablet sem violar passive listener
       e.preventDefault();
     }
     const coords = getCoordinates(e);

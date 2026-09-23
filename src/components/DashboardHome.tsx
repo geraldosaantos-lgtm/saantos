@@ -1,6 +1,6 @@
 import React from 'react';
 import { CompanyProfile, GoalsConfig, ServiceLaunch, ActiveTab } from '../types';
-import { formatCurrency, formatDateTime } from '../utils/storage';
+import { formatCurrency, formatDateTime, getLocalDateString } from '../utils/storage';
 import {
   Car,
   Users,
@@ -36,7 +36,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
 }) => {
   // Cálculos rápidos para o resumo operacional
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = getLocalDateString(now);
 
   let totalHoje = 0;
   let qtdHoje = 0;
@@ -44,7 +44,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   let qtdMes = 0;
 
   launches.forEach((l) => {
-    const lDateStr = l.dataHora.slice(0, 10);
+    const lDateStr = getLocalDateString(l.dataHora);
     const lDate = new Date(l.dataHora);
 
     if (lDateStr === todayStr) {
