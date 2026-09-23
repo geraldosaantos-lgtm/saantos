@@ -8,6 +8,9 @@ export interface SupabaseConfig {
   source: 'env' | 'custom' | 'none';
 }
 
+export const DEFAULT_SUPABASE_URL = 'https://hklgdfiyersyiesyktqp.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_YsnM2JfCjjdg18wnQZXmbQ_QX73ATaz';
+
 let cachedClient: SupabaseClient | null = null;
 let lastUrl = '';
 let lastKey = '';
@@ -16,7 +19,7 @@ export function getSupabaseConfig(): SupabaseConfig {
   const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
   const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
-  // Se tiver configurado em variável de ambiente (Vercel ou .env)
+  // 1. Variável de ambiente (Vercel ou .env)
   if (envUrl && envKey && !envUrl.includes('seu-projeto')) {
     return {
       url: envUrl,
@@ -25,7 +28,7 @@ export function getSupabaseConfig(): SupabaseConfig {
     };
   }
 
-  // Se o usuário digitou no modal de infraestrutura no navegador
+  // 2. Credenciais personalizadas salvas no navegador
   try {
     const custom = localStorage.getItem(SUPABASE_CONFIG_STORAGE_KEY);
     if (custom) {
@@ -40,6 +43,15 @@ export function getSupabaseConfig(): SupabaseConfig {
     }
   } catch (e) {
     console.error('Erro ao ler credenciais personalizadas do Supabase:', e);
+  }
+
+  // 3. Nuvem oficial do AutoLava (permite sincronização imediata no celular e computador)
+  if (DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY) {
+    return {
+      url: DEFAULT_SUPABASE_URL,
+      anonKey: DEFAULT_SUPABASE_ANON_KEY,
+      source: 'default' as any,
+    };
   }
 
   return {

@@ -7,8 +7,8 @@ import {
   ServiceLaunch,
   GoalsConfig,
 } from './types';
-import { loadStoredData, saveStoredData } from './utils/storage';
-import { getSupabaseConfig } from './lib/supabase';
+import { loadStoredData, saveStoredData, AppState } from './utils/storage';
+import { getSupabaseConfig, getSupabaseClient } from './lib/supabase';
 import {
   fetchStateFromSupabase,
   syncCompanyToSupabase,
@@ -19,6 +19,7 @@ import {
   syncLaunchToSupabase,
   deleteLaunchFromSupabase,
   syncGoalsToSupabase,
+  uploadAllLocalDataToSupabase,
 } from './services/supabaseService';
 import { DashboardHome } from './components/DashboardHome';
 import { LancamentosView } from './components/LancamentosView';
@@ -42,7 +43,9 @@ import {
   X,
   AlertCircle,
   Database,
-  MoreHorizontal
+  MoreHorizontal,
+  RefreshCw,
+  Check
 } from 'lucide-react';
 
 export default function App() {
@@ -55,31 +58,148 @@ export default function App() {
   const [editingLaunch, setEditingLaunch] = useState<ServiceLaunch | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSupabaseOnline, setIsSupabaseOnline] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
 
-  // Inicialização: carrega dados do Supabase se estiver configurado
+  // Inicialização e Sincronização em Tempo Real (Celular + Computador)
   useEffect(() => {
     const cfg = getSupabaseConfig();
     const hasConfig = !!cfg.url && !!cfg.anonKey;
     setIsSupabaseOnline(hasConfig);
 
-    if (hasConfig) {
-      fetchStateFromSupabase().then((remoteData) => {
+    if (!hasConfig) return;
+
+    // 1. Carrega dados do Supabase e sincroniza bidirecionalmente com o cache local
+    const runInitialSync = async () => {
+      try {
+        const remoteData = await fetchStateFromSupabase();
         if (remoteData) {
           setData((prev) => {
-            const merged = {
-              company: remoteData.company || prev.company,
-              services: remoteData.services?.length ? remoteData.services : prev.services,
-              clients: remoteData.clients?.length ? remoteData.clients : prev.clients,
-              launches: remoteData.launches?.length ? remoteData.launches : prev.launches,
+            const remoteLaunches = remoteData.launches || [];
+            const remoteLaunchIds = new Set(remoteLaunches.map((l) => l.id));
+            const localOnlyLaunches = prev.launches.filter((l) => !remoteLaunchIds.has(l.id));
+
+            // Se este dispositivo tem lançamentos locais que ainda não estão no Supabase (ex: feitos no computador),
+            // envia-os para a nuvem para que o celular veja imediatamente!
+            if (localOnlyLaunches.length > 0) {
+              localOnlyLaunches.forEach((l) => syncLaunchToSupabase(l));
+            }
+
+            // Clientes locais não presentes na nuvem
+            const remoteClients = remoteData.clients || [];
+            const remoteClientIds = new Set(remoteClients.map((c) => c.id));
+            const localOnlyClients = prev.clients.filter((c) => !remoteClientIds.has(c.id));
+            if (localOnlyClients.length > 0) {
+              localOnlyClients.forEach((c) => syncClientToSupabase(c));
+            }
+
+            // Serviços locais não presentes na nuvem
+            const remoteServices = remoteData.services || [];
+            const remoteServiceIds = new Set(remoteServices.map((s) => s.id));
+            const localOnlyServices = prev.services.filter((s) => !remoteServiceIds.has(s.id));
+            if (localOnlyServices.length > 0) {
+              localOnlyServices.forEach((s) => syncServiceToSupabase(s));
+            }
+
+            // Empresa: se foi configurada localmente e a remota ainda não, sobe
+            if (prev.company.isConfigured && !remoteData.company?.isConfigured) {
+              syncCompanyToSupabase(prev.company);
+            }
+
+            const allLaunches = [...remoteLaunches, ...localOnlyLaunches];
+            allLaunches.sort((a, b) => new Date(b.dataHora).getTime() - new Date(a.dataHora).getTime());
+
+            const merged: AppState = {
+              company: remoteData.company?.isConfigured ? remoteData.company : prev.company,
+              services: remoteServices.length > 0 ? remoteServices : prev.services,
+              clients: remoteClients.length > 0 ? remoteClients : prev.clients,
+              launches: allLaunches,
               goals: remoteData.goals || prev.goals,
             };
+
             saveStoredData(merged);
             return merged;
           });
         }
-      });
+      } catch (err) {
+        console.error('Erro na sincronização inicial com Supabase:', err);
+      }
+    };
+
+    runInitialSync();
+
+    // 2. Realtime: ouve inserções e alterações instantâneas no Supabase
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      const channel = supabase
+        .channel('autolava_realtime_sync')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'service_launches' },
+          () => {
+            fetchStateFromSupabase().then((remote) => {
+              if (remote?.launches) {
+                setData((prev) => {
+                  const updated = { ...prev, launches: remote.launches! };
+                  saveStoredData(updated);
+                  return updated;
+                });
+              }
+            });
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'clients' },
+          () => {
+            fetchStateFromSupabase().then((remote) => {
+              if (remote?.clients) {
+                setData((prev) => {
+                  const updated = { ...prev, clients: remote.clients! };
+                  saveStoredData(updated);
+                  return updated;
+                });
+              }
+            });
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }
   }, [isInfraModalOpen]);
+
+  // Função manual para forçar sincronização a qualquer momento
+  const handleForceSync = async () => {
+    setIsSyncing(true);
+    try {
+      await uploadAllLocalDataToSupabase(data);
+      const remote = await fetchStateFromSupabase();
+      if (remote) {
+        setData((prev) => {
+          const merged: AppState = {
+            company: remote.company?.isConfigured ? remote.company : prev.company,
+            services: remote.services?.length ? remote.services : prev.services,
+            clients: remote.clients?.length ? remote.clients : prev.clients,
+            launches: remote.launches?.length ? remote.launches : prev.launches,
+            goals: remote.goals || prev.goals,
+          };
+          saveStoredData(merged);
+          return merged;
+        });
+      }
+      setSyncStatusMsg('Dados sincronizados com o Supabase!');
+      setTimeout(() => setSyncStatusMsg(null), 3500);
+    } catch (e: any) {
+      console.error(e);
+      setSyncStatusMsg('Erro ao sincronizar.');
+      setTimeout(() => setSyncStatusMsg(null), 3500);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Primeiro acesso: verifica se a empresa já foi configurada
   useEffect(() => {
@@ -259,10 +379,21 @@ export default function App() {
           </nav>
 
           {/* Zone 3: Primary Actions */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            {/* Botão de Sincronização Nuvem (Celular + PC) */}
+            <button
+              onClick={handleForceSync}
+              disabled={isSyncing}
+              className="p-2 sm:px-3 sm:py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 hover:bg-neutral-50 rounded-lg transition-colors flex items-center gap-1.5 shadow-2xs"
+              title="Sincronizar dados entre Celular e Computador via Supabase"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-neutral-900' : 'text-neutral-500'}`} />
+              <span className="hidden lg:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+            </button>
+
             <button
               onClick={() => setIsInfraModalOpen(true)}
-              className={`px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap border ${
+              className={`px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap border ${
                 isSupabaseOnline
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                   : 'bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-50'
@@ -271,7 +402,7 @@ export default function App() {
             >
               <Database className={`w-3.5 h-3.5 ${isSupabaseOnline ? 'text-emerald-600' : 'text-neutral-500'}`} />
               <span className="hidden sm:inline">
-                {isSupabaseOnline ? 'Supabase Conectado' : 'Infra / Supabase'}
+                {isSupabaseOnline ? 'Nuvem Conectada' : 'Infra / Supabase'}
               </span>
             </button>
 
@@ -280,11 +411,11 @@ export default function App() {
                 setIsFirstAccess(false);
                 setIsCompanyModalOpen(true);
               }}
-              className="px-3 py-2 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap"
+              className="hidden sm:flex px-3 py-2 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors items-center gap-1.5 whitespace-nowrap"
               title="Dados da Minha Empresa (CNPJ, Razão, PIX, Banco, Logotipo)"
             >
               <Building2 className="w-3.5 h-3.5 text-neutral-500" />
-              <span className="hidden sm:inline">Minha Empresa</span>
+              <span>Minha Empresa</span>
             </button>
 
             <button
@@ -292,7 +423,7 @@ export default function App() {
                 setEditingLaunch(null);
                 setIsLancamentoModalOpen(true);
               }}
-              className="px-3.5 py-2 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs whitespace-nowrap"
+              className="px-3 sm:px-3.5 py-2 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs whitespace-nowrap"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Lançamento</span>
@@ -302,11 +433,20 @@ export default function App() {
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="md:hidden p-2 text-neutral-600 hover:text-neutral-900 rounded-lg"
+              aria-label="Menu"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
           </div>
         </div>
+
+        {/* Notificação de Sincronização */}
+        {syncStatusMsg && (
+          <div className="bg-emerald-700 text-white px-4 py-1.5 text-xs text-center font-medium flex items-center justify-center gap-2 transition-all shadow-inner">
+            <Check className="w-3.5 h-3.5" />
+            <span>{syncStatusMsg}</span>
+          </div>
+        )}
 
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
@@ -340,6 +480,18 @@ export default function App() {
               <button
                 onClick={() => {
                   setMobileMenuOpen(false);
+                  handleForceSync();
+                }}
+                disabled={isSyncing}
+                className="w-full px-3 py-2.5 text-xs font-medium rounded-lg flex items-center gap-2.5 text-neutral-800 hover:bg-neutral-50"
+              >
+                <RefreshCw className={`w-4 h-4 text-emerald-600 ${isSyncing ? 'animate-spin' : ''}`} />
+                {isSyncing ? 'Sincronizando Nuvem...' : 'Sincronizar com Computador (Nuvem)'}
+              </button>
+
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
                   setIsCompanyModalOpen(true);
                 }}
                 className="w-full px-3 py-2.5 text-xs font-medium rounded-lg flex items-center gap-2.5 text-neutral-700 hover:bg-neutral-50"
@@ -356,7 +508,7 @@ export default function App() {
                 className="w-full px-3 py-2.5 text-xs font-medium rounded-lg flex items-center gap-2.5 text-neutral-700 hover:bg-neutral-50"
               >
                 <Database className={`w-4 h-4 ${isSupabaseOnline ? 'text-emerald-600' : 'text-neutral-500'}`} />
-                {isSupabaseOnline ? 'Supabase Conectado (Infra)' : 'Configurar Supabase'}
+                {isSupabaseOnline ? 'Nuvem Conectada (Supabase)' : 'Configurar Supabase'}
               </button>
             </div>
           </div>
