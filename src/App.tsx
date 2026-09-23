@@ -41,7 +41,8 @@ import {
   Menu,
   X,
   AlertCircle,
-  Database
+  Database,
+  MoreHorizontal
 } from 'lucide-react';
 
 export default function App() {
@@ -309,7 +310,10 @@ export default function App() {
 
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-neutral-200 bg-white px-4 py-3 space-y-1">
+          <div className="md:hidden border-t border-neutral-200 bg-white px-4 py-3 space-y-1 shadow-lg animate-in slide-in-from-top-2">
+            <div className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider px-3 py-1">
+              Menu de Navegação
+            </div>
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -331,6 +335,30 @@ export default function App() {
                 </button>
               );
             })}
+
+            <div className="border-t border-neutral-100 my-2 pt-2 space-y-1">
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setIsCompanyModalOpen(true);
+                }}
+                className="w-full px-3 py-2.5 text-xs font-medium rounded-lg flex items-center gap-2.5 text-neutral-700 hover:bg-neutral-50"
+              >
+                <Building2 className="w-4 h-4 text-neutral-500" />
+                Dados da Minha Empresa (CNPJ / PIX)
+              </button>
+
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setIsInfraModalOpen(true);
+                }}
+                className="w-full px-3 py-2.5 text-xs font-medium rounded-lg flex items-center gap-2.5 text-neutral-700 hover:bg-neutral-50"
+              >
+                <Database className={`w-4 h-4 ${isSupabaseOnline ? 'text-emerald-600' : 'text-neutral-500'}`} />
+                {isSupabaseOnline ? 'Supabase Conectado (Infra)' : 'Configurar Supabase'}
+              </button>
+            </div>
           </div>
         )}
       </header>
@@ -357,7 +385,7 @@ export default function App() {
       )}
 
       {/* Main Content Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-28 md:pb-8">
         {activeTab === 'inicio' && (
           <DashboardHome
             company={data.company}
@@ -459,11 +487,68 @@ export default function App() {
       />
 
       {/* Footer discreto */}
-      <footer className="mt-auto border-t border-neutral-200 bg-white py-4 px-6 text-center text-xs text-neutral-500 print:hidden">
+      <footer className="mt-auto border-t border-neutral-200 bg-white py-4 px-6 text-center text-xs text-neutral-500 print:hidden hidden md:block">
         <p>
           AutoLava · Sistema de Gestão Operacional de Serviços Automotivos e Frotas
         </p>
       </footer>
+
+      {/* Barra de Navegação Inferior Fixa para Celular (Mobile Navigation Bar) */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-neutral-200 px-3 py-1.5 flex items-center justify-around shadow-lg print:hidden">
+        <button
+          onClick={() => setActiveTab('inicio')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg text-[10px] transition-colors ${
+            activeTab === 'inicio' ? 'text-neutral-950 font-bold' : 'text-neutral-500'
+          }`}
+        >
+          <Home className={`w-5 h-5 mb-0.5 ${activeTab === 'inicio' ? 'text-neutral-950' : 'text-neutral-400'}`} />
+          <span>Início</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('lancamentos')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg text-[10px] transition-colors ${
+            activeTab === 'lancamentos' ? 'text-neutral-950 font-bold' : 'text-neutral-500'
+          }`}
+        >
+          <Car className={`w-5 h-5 mb-0.5 ${activeTab === 'lancamentos' ? 'text-neutral-950' : 'text-neutral-400'}`} />
+          <span>Ordens</span>
+        </button>
+
+        {/* Botão de Destaque: Novo Lançamento Rápido no Pátio */}
+        <button
+          onClick={() => {
+            setEditingLaunch(null);
+            setIsLancamentoModalOpen(true);
+          }}
+          className="-mt-5 w-12 h-12 bg-neutral-950 text-white rounded-full shadow-lg flex items-center justify-center border-4 border-white active:scale-95 transition-transform"
+          aria-label="Novo Lançamento de Serviço"
+        >
+          <Plus className="w-6 h-6" />
+        </button>
+
+        <button
+          onClick={() => setActiveTab('clientes')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg text-[10px] transition-colors ${
+            activeTab === 'clientes' ? 'text-neutral-950 font-bold' : 'text-neutral-500'
+          }`}
+        >
+          <Users className={`w-5 h-5 mb-0.5 ${activeTab === 'clientes' ? 'text-neutral-950' : 'text-neutral-400'}`} />
+          <span>Clientes</span>
+        </button>
+
+        <button
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg text-[10px] transition-colors ${
+            mobileMenuOpen || ['servicos', 'metas', 'relatorios'].includes(activeTab)
+              ? 'text-neutral-950 font-bold'
+              : 'text-neutral-500'
+          }`}
+        >
+          <MoreHorizontal className={`w-5 h-5 mb-0.5 ${mobileMenuOpen || ['servicos', 'metas', 'relatorios'].includes(activeTab) ? 'text-neutral-950' : 'text-neutral-400'}`} />
+          <span>Mais</span>
+        </button>
+      </nav>
     </div>
   );
 }

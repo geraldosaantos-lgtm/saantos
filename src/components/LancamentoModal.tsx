@@ -205,39 +205,40 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-neutral-950/60 backdrop-blur-xs overflow-y-auto">
-      <div className="relative w-full max-w-3xl bg-white rounded-xl shadow-2xl border border-neutral-200 overflow-hidden my-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-neutral-950/60 backdrop-blur-xs overflow-y-auto">
+      <div className="relative w-full max-w-3xl bg-white rounded-2xl sm:rounded-xl shadow-2xl border border-neutral-200 overflow-hidden my-2 sm:my-4 flex flex-col max-h-[92vh]">
         {/* Cabeçalho */}
-        <div className="px-6 py-4 border-b border-neutral-200 bg-neutral-50 flex items-center justify-between">
+        <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-neutral-200 bg-neutral-50 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-neutral-900 text-white rounded-lg">
+            <div className="p-2 bg-neutral-900 text-white rounded-lg shrink-0">
               <Car className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-neutral-900">
-                {existingLaunch ? `Editar Lançamento #${existingLaunch.numeroOS}` : 'Novo Lançamento de Serviço Automotivo'}
+              <h2 className="text-sm sm:text-base font-bold text-neutral-900 leading-tight">
+                {existingLaunch ? `Editar Lançamento #${existingLaunch.numeroOS}` : 'Novo Lançamento de Serviço'}
               </h2>
-              <p className="text-xs text-neutral-500">
-                Registre os dados do veículo, condutor, serviços e colete a assinatura digital.
+              <p className="text-[11px] sm:text-xs text-neutral-500">
+                Veículo, condutor, serviços e assinatura digital.
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-neutral-400 hover:text-neutral-700 p-1 rounded-md transition-colors"
+            className="text-neutral-400 hover:text-neutral-700 p-1.5 rounded-lg transition-colors hover:bg-neutral-200/50"
+            aria-label="Fechar"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {errorMsg && (
-          <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex justify-between items-center">
+          <div className="mx-4 sm:mx-6 mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex justify-between items-center shrink-0">
             <span>{errorMsg}</span>
-            <button onClick={() => setErrorMsg('')} className="text-red-500 font-bold ml-2">×</button>
+            <button onClick={() => setErrorMsg('')} className="text-red-500 font-bold ml-2 text-base">×</button>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
           {/* Seção 1: Cliente e Veículo */}
           <div>
             <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2.5">
@@ -493,24 +494,25 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
           </div>
 
           {/* Ações */}
-          <div className="pt-4 border-t border-neutral-200 flex items-center justify-between">
-            <div className="text-xs text-neutral-600">
-              Total a Faturar: <strong className="text-base text-neutral-950 font-mono">{formatCurrency(valorTotal)}</strong>
+          <div className="pt-4 border-t border-neutral-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="text-xs text-neutral-600 bg-neutral-50 sm:bg-transparent p-2 sm:p-0 rounded-lg flex items-center justify-between sm:block border sm:border-0 border-neutral-200">
+              <span>Total a Faturar:</span>
+              <span className="text-base text-neutral-950 font-mono font-bold ml-1.5">{formatCurrency(valorTotal)}</span>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors"
+                className="flex-1 sm:flex-initial px-4 py-2.5 sm:py-2 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg transition-colors text-center"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+                className="flex-2 sm:flex-initial px-5 py-2.5 sm:py-2 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm"
               >
                 <CheckCircle className="w-4 h-4" />
-                {existingLaunch ? 'Salvar Alterações' : 'Concluir e Gravar Lançamento'}
+                {existingLaunch ? 'Salvar Alterações' : 'Concluir Lançamento'}
               </button>
             </div>
           </div>
