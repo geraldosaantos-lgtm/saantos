@@ -1,0 +1,8 @@
+{
+  "name": "AutoLava - Gestão de Serviços Automotivos",
+  "description": "Sistema de controle operacional para lava jato e serviços automotivos: lançamentos de serviços com assinatura digital do condutor, cadastro de clientes com tabela de preços personalizada, cadastro de serviços, controle de metas e relatórios para PDF e Excel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
