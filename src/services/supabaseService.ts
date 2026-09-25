@@ -116,6 +116,7 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
         responsavel: l.responsavel,
         nomeCondutor: l.nome_condutor,
         matriculaCondutor: l.matricula_condutor,
+        contratoCentroCusto: l.contrato_centro_custo || '',
         servicos: l.servicos || [],
         valorTotal: Number(l.valor_total) || 0,
         assinatura: l.assinatura || '',
@@ -248,13 +249,14 @@ export async function syncLaunchToSupabase(launch: ServiceLaunch): Promise<boole
   if (!supabase) return false;
 
   try {
-    const payload = {
+    const payload: Record<string, any> = {
       id: launch.id,
       numero_os: launch.numeroOS,
       data_hora: launch.dataHora,
       cliente_id: launch.clienteId || null,
       cliente_nome: launch.clienteNome,
       cliente_cnpj: launch.clienteCnpj,
+      contrato_centro_custo: launch.contratoCentroCusto || '',
       placa: launch.placa,
       modelo: launch.modelo,
       km: String(launch.km),
@@ -270,6 +272,13 @@ export async function syncLaunchToSupabase(launch: ServiceLaunch): Promise<boole
     };
 
     let { error } = await supabase.from('service_launches').upsert(payload, { onConflict: 'id' });
+
+    // Fallback: se a coluna contrato_centro_custo ainda não existir na tabela Supabase antiga, tenta sem ela
+    if (error && (error.code === '42703' || error.message?.includes('contrato_centro_custo'))) {
+      const { contrato_centro_custo, ...payloadSemCC } = payload;
+      const retryCol = await supabase.from('service_launches').upsert(payloadSemCC, { onConflict: 'id' });
+      error = retryCol.error;
+    }
 
     // Fallback: se houver falha de chave estrangeira (ex: cliente não sincronizado ainda), salva com cliente_id nulo para não perder o lançamento
     if (error && (error.code === '23503' || error.message?.includes('foreign key'))) {
@@ -293,6 +302,20 @@ export async function deleteLaunchFromSupabase(launchId: string): Promise<boolea
 
   try {
     const { error } = await supabase.from('service_launches').delete().eq('id', launchId);
+    return !error;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
+}
+
+export async function clearAllLaunchesFromSupabase(): Promise<boolean> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+
+  try {
+    const { error } = await supabase.from('service_launches').delete().neq('id', '');
+    if (error) console.error('Erro ao limpar lançamentos no Supabase:', error);
     return !error;
   } catch (e) {
     console.error(e);

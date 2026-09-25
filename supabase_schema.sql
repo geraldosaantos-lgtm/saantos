@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS public.service_launches (
   cliente_id TEXT REFERENCES public.clients(id) ON DELETE SET NULL,
   cliente_nome TEXT NOT NULL,
   cliente_cnpj TEXT DEFAULT '',
+  contrato_centro_custo TEXT DEFAULT '',
   placa TEXT NOT NULL,
   modelo TEXT NOT NULL,
   km TEXT DEFAULT '',
@@ -88,6 +89,9 @@ CREATE TABLE IF NOT EXISTS public.service_launches (
   created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
 );
+
+-- Garantir coluna contrato_centro_custo em tabelas existentes
+ALTER TABLE public.service_launches ADD COLUMN IF NOT EXISTS contrato_centro_custo TEXT DEFAULT '';
 
 -- ÍNDICES DE ALTA PERFORMANCE
 CREATE INDEX IF NOT EXISTS idx_launches_data_hora ON public.service_launches(data_hora DESC);

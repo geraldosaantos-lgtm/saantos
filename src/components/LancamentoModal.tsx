@@ -28,6 +28,7 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   const [responsavel, setResponsavel] = useState('');
   const [nomeCondutor, setNomeCondutor] = useState('');
   const [matriculaCondutor, setMatriculaCondutor] = useState('');
+  const [contratoCentroCusto, setContratoCentroCusto] = useState('');
   const [observacoes, setObservacoes] = useState('');
   const [assinatura, setAssinatura] = useState('');
   const [itensServico, setItensServico] = useState<ServiceItemLaunch[]>([]);
@@ -44,6 +45,7 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       setResponsavel(existingLaunch.responsavel);
       setNomeCondutor(existingLaunch.nomeCondutor);
       setMatriculaCondutor(existingLaunch.matriculaCondutor);
+      setContratoCentroCusto(existingLaunch.contratoCentroCusto || '');
       setObservacoes(existingLaunch.observacoes || '');
       setAssinatura(existingLaunch.assinatura);
       setItensServico(existingLaunch.servicos);
@@ -57,6 +59,7 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       setResponsavel('Operador / Lavador Geral');
       setNomeCondutor('');
       setMatriculaCondutor('');
+      setContratoCentroCusto('');
       setObservacoes('');
       setAssinatura('');
 
@@ -193,6 +196,7 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       responsavel: responsavel.trim(),
       nomeCondutor: nomeCondutor.trim(),
       matriculaCondutor: matriculaCondutor.trim() || 'S/N',
+      contratoCentroCusto: contratoCentroCusto.trim(),
       servicos: itensServico,
       valorTotal: valorTotal,
       assinatura: assinatura,
@@ -306,6 +310,22 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
                   onChange={(e) => setModelo(e.target.value)}
                   className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900"
                 />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-neutral-700 mb-1">
+                  Contrato / Centro de Custo
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: CT-2026/01, CC-FROTA-SP, Obra Norte, etc."
+                  value={contratoCentroCusto}
+                  onChange={(e) => setContratoCentroCusto(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono"
+                />
+                <span className="text-[10px] text-neutral-500 block mt-0.5">
+                  Identificador para faturamento e rateio do cliente (exibido nos relatórios de frotas).
+                </span>
               </div>
 
               <div className="md:col-span-2">

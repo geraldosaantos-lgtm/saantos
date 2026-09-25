@@ -365,6 +365,7 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({
                   <th className="py-2.5 px-3 w-24">Data / Hora</th>
                   <th className="py-2.5 px-3 w-16">OS</th>
                   {!selectedClient && <th className="py-2.5 px-3 w-32">Cliente</th>}
+                  <th className="py-2.5 px-3 w-28">Contrato / CC</th>
                   <th className="py-2.5 px-3 w-28">Veículo / Placa</th>
                   <th className="py-2.5 px-3 w-16">KM</th>
                   <th className="py-2.5 px-3">Serviços Realizados</th>
@@ -395,6 +396,17 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({
                         {item.clienteNome}
                       </td>
                     )}
+
+                    {/* Contrato / Centro de Custo */}
+                    <td className="py-2.5 px-3 align-top font-mono text-[11px] text-neutral-700">
+                      {item.contratoCentroCusto ? (
+                        <span className="inline-block px-1.5 py-0.5 bg-neutral-100 border border-neutral-200 text-neutral-800 rounded font-semibold text-[10px]">
+                          {item.contratoCentroCusto}
+                        </span>
+                      ) : (
+                        <span className="text-neutral-400">-</span>
+                      )}
+                    </td>
 
                     {/* Placa e Modelo */}
                     <td className="py-2.5 px-3 align-top">
@@ -476,7 +488,7 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({
                 {filteredLaunches.length === 0 && (
                   <tr>
                     <td
-                      colSpan={selectedClient ? 8 : 9}
+                      colSpan={selectedClient ? 9 : 10}
                       className="py-8 text-center text-neutral-400 text-xs"
                     >
                       Nenhum serviço automotivo encontrado para o período e cliente selecionados.
@@ -490,7 +502,7 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({
                 <tfoot className="bg-neutral-100 font-bold border-t-2 border-neutral-300">
                   <tr>
                     <td
-                      colSpan={selectedClient ? 5 : 6}
+                      colSpan={selectedClient ? 6 : 7}
                       className="py-3 px-3 text-right text-xs uppercase tracking-wider text-neutral-700"
                     >
                       TOTAL GERAL DO PERÍODO ({filteredLaunches.length} ATENDIMENTOS):

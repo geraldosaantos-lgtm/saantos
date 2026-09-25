@@ -19,6 +19,7 @@ interface LancamentosViewProps {
   onOpenNewLaunch: () => void;
   onEditLaunch: (launch: ServiceLaunch) => void;
   onDeleteLaunch: (id: string) => void;
+  onClearAllLaunches?: () => void;
 }
 
 export const LancamentosView: React.FC<LancamentosViewProps> = ({
@@ -26,12 +27,14 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
   onOpenNewLaunch,
   onEditLaunch,
   onDeleteLaunch,
+  onClearAllLaunches,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSignature, setSelectedSignature] = useState<{
     launch: ServiceLaunch;
   } | null>(null);
   const [launchToDelete, setLaunchToDelete] = useState<ServiceLaunch | null>(null);
+  const [isClearAllModalOpen, setIsClearAllModalOpen] = useState(false);
 
   const filtered = launches.filter((l) => {
     const term = searchTerm.toLowerCase();
@@ -41,7 +44,8 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
       l.clienteNome.toLowerCase().includes(term) ||
       l.nomeCondutor.toLowerCase().includes(term) ||
       l.matriculaCondutor.toLowerCase().includes(term) ||
-      l.numeroOS.toLowerCase().includes(term)
+      l.numeroOS.toLowerCase().includes(term) ||
+      (Boolean(l.contratoCentroCusto) && l.contratoCentroCusto!.toLowerCase().includes(term))
     );
   });
 
@@ -57,13 +61,25 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
             Histórico completo de ordens de serviço, veículos lavados, condutores e assinaturas registradas.
           </p>
         </div>
-        <button
-          onClick={onOpenNewLaunch}
-          className="px-4 py-2 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          Novo Lançamento
-        </button>
+        <div className="flex items-center gap-2">
+          {onClearAllLaunches && launches.length > 0 && (
+            <button
+              onClick={() => setIsClearAllModalOpen(true)}
+              className="px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-xs"
+              title="Excluir todos os lançamentos de uma vez"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Limpar Todos
+            </button>
+          )}
+          <button
+            onClick={onOpenNewLaunch}
+            className="px-4 py-2 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            Novo Lançamento
+          </button>
+        </div>
       </div>
 
       {/* Barra de Busca */}
@@ -109,11 +125,18 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
             <div>
               <div className="text-xs font-bold text-neutral-900">{l.modelo}</div>
               <div className="text-[11px] text-neutral-600 truncate">{l.clienteNome}</div>
-              {l.km && l.km !== '0' && (
-                <div className="text-[10px] font-mono text-neutral-500 mt-0.5">
-                  KM: {l.km}
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                {l.km && l.km !== '0' && (
+                  <span className="text-[10px] font-mono text-neutral-500">
+                    KM: {l.km}
+                  </span>
+                )}
+                {l.contratoCentroCusto && (
+                  <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 bg-neutral-100 border border-neutral-200 rounded text-neutral-700">
+                    Contrato/CC: {l.contratoCentroCusto}
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Serviços Executados */}
@@ -211,7 +234,12 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
                     {l.numeroOS}
                   </td>
                   <td className="py-2.5 px-3 font-medium text-neutral-900">
-                    {l.clienteNome}
+                    <div>{l.clienteNome}</div>
+                    {l.contratoCentroCusto && (
+                      <span className="inline-block mt-0.5 text-[10px] font-mono font-medium text-neutral-600 bg-neutral-100 border border-neutral-200 px-1 py-0.5 rounded">
+                        {l.contratoCentroCusto}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2.5 px-3">
                     <span className="font-mono font-bold text-neutral-950 block">
@@ -312,6 +340,22 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
           }
         }}
         onCancel={() => setLaunchToDelete(null)}
+      />
+
+      {/* Modal de Confirmação para Limpar Todos */}
+      <ConfirmModal
+        isOpen={isClearAllModalOpen}
+        title="Excluir Todos os Lançamentos"
+        message="Tem certeza que deseja excluir permanentemente todas as ordens de serviço? Todos os lançamentos serão removidos localmente e do banco de dados na nuvem."
+        confirmLabel="Sim, Excluir Todos"
+        cancelLabel="Cancelar"
+        onConfirm={() => {
+          if (onClearAllLaunches) {
+            onClearAllLaunches();
+          }
+          setIsClearAllModalOpen(false);
+        }}
+        onCancel={() => setIsClearAllModalOpen(false)}
       />
 
       {/* Modal de Visualização da Assinatura Coletada */}

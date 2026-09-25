@@ -172,96 +172,10 @@ export const defaultGoals: GoalsConfig = {
   metaMensalQtd: 300,
 };
 
-export const defaultLaunches: ServiceLaunch[] = [
-  {
-    id: 'lnc-1',
-    numeroOS: 'OS-00101',
-    dataHora: '2026-09-22T09:15:00',
-    clienteId: 'cli-1',
-    clienteNome: 'Expresso Logística',
-    clienteCnpj: '45.123.789/0001-12',
-    placa: 'BRA-2E19',
-    modelo: 'Fiat Strada Endurance 1.4',
-    km: '48.250',
-    responsavel: 'Carlos Eduardo (Lavador)',
-    nomeCondutor: 'Marcos Vinicius Ribeiro',
-    matriculaCondutor: 'MOT-4421',
-    servicos: [
-      {
-        serviceId: 'srv-2',
-        nome: 'Lavagem Completa (Externa + Aspiração)',
-        preco: 65.0,
-        quantidade: 1,
-        subtotal: 65.0,
-      },
-    ],
-    valorTotal: 65.0,
-    assinatura: createSampleSignature('M. V. Ribeiro'),
-    observacoes: 'Veículo entregue sem avarias externas.',
-    status: 'Concluído',
-  },
-  {
-    id: 'lnc-2',
-    numeroOS: 'OS-00102',
-    dataHora: '2026-09-22T11:40:00',
-    clienteId: 'cli-2',
-    clienteNome: 'Metropolitana Locações',
-    clienteCnpj: '18.990.456/0001-34',
-    placa: 'RKO-9B45',
-    modelo: 'Jeep Renegade Longitude',
-    km: '24.110',
-    responsavel: 'Luciano Silva',
-    nomeCondutor: 'Patrícia Souza Lima',
-    matriculaCondutor: 'COND-1090',
-    servicos: [
-      {
-        serviceId: 'srv-3',
-        nome: 'Lavagem Completa Utilitários / SUV',
-        preco: 88.0,
-        quantidade: 1,
-        subtotal: 88.0,
-      },
-    ],
-    valorTotal: 88.0,
-    assinatura: createSampleSignature('Patricia S.'),
-    observacoes: 'Cliente solicitou atenção especial no porta-malas.',
-    status: 'Concluído',
-  },
-  {
-    id: 'lnc-3',
-    numeroOS: 'OS-00103',
-    dataHora: '2026-09-23T08:30:00',
-    clienteId: 'cli-1',
-    clienteNome: 'Expresso Logística',
-    clienteCnpj: '45.123.789/0001-12',
-    placa: 'GDX-5A88',
-    modelo: 'Toyota Hilux CD 4x4',
-    km: '89.600',
-    responsavel: 'Carlos Eduardo',
-    nomeCondutor: 'Antônio Ferreira Dias',
-    matriculaCondutor: 'MOT-3390',
-    servicos: [
-      {
-        serviceId: 'srv-3',
-        nome: 'Lavagem Completa Utilitários / SUV',
-        preco: 85.0,
-        quantidade: 1,
-        subtotal: 85.0,
-      },
-      {
-        serviceId: 'srv-4',
-        nome: 'Lavagem de Motor e Chassi',
-        preco: 95.0,
-        quantidade: 1,
-        subtotal: 95.0,
-      },
-    ],
-    valorTotal: 180.0,
-    assinatura: createSampleSignature('A. F. Dias'),
-    observacoes: 'Desengraxe pesado de chassi realizado com sucesso.',
-    status: 'Concluído',
-  },
-];
+export const defaultLaunches: ServiceLaunch[] = [];
+
+export const DEMO_LAUNCH_IDS = ['lnc-1', 'lnc-2', 'lnc-3'];
+export const DEMO_LAUNCH_OS = ['OS-00101', 'OS-00102', 'OS-00103'];
 
 export interface AppState {
   company: CompanyProfile;
@@ -276,13 +190,26 @@ export const loadStoredData = (): AppState => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      return {
+      // Remove quaisquer lançamentos residuais de demonstração da base local
+      const rawLaunches: any[] = Array.isArray(parsed.launches) ? parsed.launches : [];
+      const cleanLaunches = rawLaunches.filter(
+        (l) => !DEMO_LAUNCH_IDS.includes(l?.id) && !DEMO_LAUNCH_OS.includes(l?.numeroOS)
+      );
+
+      const state: AppState = {
         company: parsed.company || defaultCompanyProfile,
-        services: parsed.services?.length ? parsed.services : defaultServices,
-        clients: parsed.clients?.length ? parsed.clients : defaultClients,
-        launches: parsed.launches?.length ? parsed.launches : defaultLaunches,
+        services: Array.isArray(parsed.services) && parsed.services.length > 0 ? parsed.services : defaultServices,
+        clients: Array.isArray(parsed.clients) ? parsed.clients : defaultClients,
+        launches: cleanLaunches,
         goals: parsed.goals || defaultGoals,
       };
+
+      // Se havia lançamentos de exemplo salvos, limpa o localStorage imediatamente
+      if (rawLaunches.length !== cleanLaunches.length) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }
+
+      return state;
     }
   } catch (e) {
     console.error('Erro ao ler localStorage', e);
@@ -292,7 +219,7 @@ export const loadStoredData = (): AppState => {
     company: defaultCompanyProfile,
     services: defaultServices,
     clients: defaultClients,
-    launches: defaultLaunches,
+    launches: [],
     goals: defaultGoals,
   };
 };

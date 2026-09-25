@@ -23,14 +23,31 @@ import {
   ShieldCheck,
   UploadCloud,
   FileCode2,
-  AlertCircle
+  AlertCircle,
+  Send,
+  Download,
+  Eye,
+  EyeOff,
+  GitBranch,
+  GitCommit,
+  Sparkles,
+  FolderArchive,
+  ArrowRight
 } from 'lucide-react';
+import {
+  getStoredGitHubConfig,
+  saveGitHubConfig,
+  pushToGitHub,
+  downloadProjectZip,
+  PushResult,
+} from '../utils/githubSync';
 
 interface InfraModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentState: AppState;
   onStateUpdated: (newState: AppState) => void;
+  initialTab?: 'supabase' | 'migrations' | 'sql' | 'vercel' | 'github';
 }
 
 export const InfraModal: React.FC<InfraModalProps> = ({
@@ -38,6 +55,7 @@ export const InfraModal: React.FC<InfraModalProps> = ({
   onClose,
   currentState,
   onStateUpdated,
+  initialTab,
 }) => {
   const [config, setConfig] = useState(getSupabaseConfig());
   const [urlInput, setUrlInput] = useState('');
@@ -48,22 +66,106 @@ export const InfraModal: React.FC<InfraModalProps> = ({
     message: string;
   } | null>(null);
   const [copiedSql, setCopiedSql] = useState(false);
-  const [activeTab, setActiveTab] = useState<'supabase' | 'migrations' | 'sql' | 'vercel' | 'github'>('supabase');
+  const [activeTab, setActiveTab] = useState<'supabase' | 'migrations' | 'sql' | 'vercel' | 'github'>(initialTab || 'supabase');
   const [selectedMigration, setSelectedMigration] = useState<number>(0);
   const [copiedMigration, setCopiedMigration] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
+  // GitHub Tab State
+  const [ghToken, setGhToken] = useState('');
+  const [ghRepo, setGhRepo] = useState('geraldosaantos-lgtm/saantos');
+  const [ghBranch, setGhBranch] = useState('main');
+  const [ghCommitMsg, setGhCommitMsg] = useState('Atualizações do Lava Jato: correções e melhorias');
+  const [showGhToken, setShowGhToken] = useState(false);
+  const [ghPushing, setGhPushing] = useState(false);
+  const [ghPushProgress, setGhPushProgress] = useState<string | null>(null);
+  const [ghPushResult, setGhPushResult] = useState<PushResult | null>(null);
+  const [ghDownloadingZip, setGhDownloadingZip] = useState(false);
+  const [ghSaveFeedback, setGhSaveFeedback] = useState<string | null>(null);
+
   useEffect(() => {
     if (isOpen) {
+      if (initialTab) {
+        setActiveTab(initialTab);
+      }
       const current = getSupabaseConfig();
       setConfig(current);
       setUrlInput(current.url);
       setKeyInput(current.anonKey);
       setTestResult(null);
       setSyncFeedback(null);
+
+      const ghConfig = getStoredGitHubConfig();
+      setGhToken(ghConfig.token);
+      setGhRepo(ghConfig.repo);
+      setGhBranch(ghConfig.branch);
+      setGhPushResult(null);
+      setGhPushProgress(null);
+      setGhSaveFeedback(null);
     }
   }, [isOpen]);
+
+  const handleSaveGitHubConfig = () => {
+    saveGitHubConfig({
+      token: ghToken,
+      repo: ghRepo,
+      branch: ghBranch,
+    });
+    setGhSaveFeedback('Configurações do GitHub salvas com sucesso no seu navegador!');
+    setTimeout(() => setGhSaveFeedback(null), 3000);
+  };
+
+  const handlePushToGitHub = async () => {
+    if (!ghToken.trim()) {
+      setGhPushResult({
+        success: false,
+        error: 'Personal Access Token do GitHub obrigatório! Clique no link "Gerar Token no GitHub" para gerar o token com permissão "repo".',
+      });
+      return;
+    }
+    if (!ghRepo.trim() || !ghRepo.includes('/')) {
+      setGhPushResult({
+        success: false,
+        error: 'Formato do repositório inválido. Deve ser no padrão: usuario/repositorio (ex: geraldosaantos-lgtm/saantos).',
+      });
+      return;
+    }
+
+    setGhPushing(true);
+    setGhPushResult(null);
+    setGhPushProgress('Iniciando envio para o GitHub...');
+
+    // Salva token e repositório
+    saveGitHubConfig({
+      token: ghToken,
+      repo: ghRepo,
+      branch: ghBranch,
+    });
+
+    const result = await pushToGitHub(
+      ghToken,
+      ghRepo,
+      ghBranch,
+      ghCommitMsg,
+      (progress) => setGhPushProgress(progress)
+    );
+
+    setGhPushResult(result);
+    setGhPushing(false);
+  };
+
+  const handleDownloadZip = async () => {
+    try {
+      setGhDownloadingZip(true);
+      await downloadProjectZip();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      alert('Erro ao gerar arquivo ZIP: ' + msg);
+    } finally {
+      setGhDownloadingZip(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -190,6 +292,7 @@ CREATE TABLE IF NOT EXISTS service_launches (
   cliente_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
   cliente_nome TEXT NOT NULL,
   cliente_cnpj TEXT DEFAULT '',
+  contrato_centro_custo TEXT DEFAULT '',
   placa TEXT NOT NULL,
   modelo TEXT NOT NULL,
   km TEXT DEFAULT '',
@@ -204,6 +307,9 @@ CREATE TABLE IF NOT EXISTS service_launches (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Garantir coluna contrato_centro_custo se a tabela já existir previamente
+ALTER TABLE service_launches ADD COLUMN IF NOT EXISTS contrato_centro_custo TEXT DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_launches_data_hora ON service_launches(data_hora DESC);
 CREATE INDEX IF NOT EXISTS idx_launches_cliente_id ON service_launches(cliente_id);
@@ -547,9 +653,9 @@ CREATE TABLE goals_config (
 -- 5. Tabela de Lançamentos & Ordens de Serviço
 CREATE TABLE service_launches (
   id TEXT PRIMARY KEY, numero_os TEXT, data_hora TEXT, cliente_id TEXT,
-  cliente_nome TEXT, cliente_cnpj TEXT, placa TEXT, modelo TEXT, km TEXT,
-  responsavel TEXT, nome_condutor TEXT, matricula_condutor TEXT,
-  servicos JSONB, valor_total NUMERIC, assinatura TEXT, status TEXT
+  cliente_nome TEXT, cliente_cnpj TEXT, contrato_centro_custo TEXT,
+  placa TEXT, modelo TEXT, km TEXT, responsavel TEXT, nome_condutor TEXT,
+  matricula_condutor TEXT, servicos JSONB, valor_total NUMERIC, assinatura TEXT, status TEXT
 );`}</pre>
               </div>
 
@@ -700,58 +806,304 @@ CREATE TABLE service_launches (
           {/* TAB 4: GITHUB */}
           {activeTab === 'github' && (
             <div className="space-y-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 space-y-1">
+              {/* Notificação / Contexto */}
+              <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-xs text-sky-900 space-y-1">
                 <p className="font-bold flex items-center gap-1.5">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  Por que o GitHub não está puxando ou não aparece na Vercel?
+                  <Sparkles className="w-4 h-4 text-sky-600 shrink-0" />
+                  Sincronização do Código com o seu GitHub
                 </p>
-                <p className="text-[11px] text-amber-800 leading-relaxed">
-                  Para que a Vercel encontre seu projeto, você precisa primeiro <strong>criar o repositório no seu GitHub</strong> e fazer o primeiro envio (push). Os arquivos do sistema já estão preparados e commitados na branch <code>main</code>!
+                <p className="text-[11px] text-sky-800 leading-relaxed">
+                  Aqui você pode <strong>enviar as alterações e melhorias do sistema diretamente para o seu GitHub</strong>.
+                  Assim que o envio for concluído, se o seu projeto estiver conectado na Vercel, o deploy em produção é atualizado automaticamente!
                 </p>
               </div>
 
-              <div className="border border-neutral-200 rounded-lg p-3.5 bg-neutral-50 space-y-3 text-xs">
-                <h5 className="font-bold text-neutral-900 flex items-center gap-1.5">
-                  <Github className="w-4 h-4 text-neutral-800" />
-                  Passo 1: Criar o Repositório no GitHub
-                </h5>
-                <ol className="list-decimal list-inside space-y-1.5 text-neutral-600 text-[11px]">
-                  <li>Acesse <a href="https://github.com/new" target="_blank" rel="noreferrer" className="text-blue-600 underline font-medium">github.com/new</a> no seu navegador.</li>
-                  <li>No campo <strong>Repository name</strong>, digite: <code className="font-mono font-bold text-neutral-900 bg-white px-1 py-0.5 rounded border border-neutral-200">autolava</code></li>
-                  <li>Deixe marcado como <strong>Public</strong> (ou Private se preferir).</li>
-                  <li><strong className="text-red-700">Atenção:</strong> NÃO marque as opções &quot;Add a README file&quot; nem &quot;Add .gitignore&quot; (pois o nosso projeto já possui ambos prontos).</li>
-                  <li>Clique no botão verde <strong>Create repository</strong>.</li>
-                </ol>
+              {/* OPÇÃO 1: ENVIO DIRETO VIA GITHUB API (WEB PUSH) */}
+              <div className="border-2 border-neutral-900 rounded-xl p-4 bg-white space-y-4 shadow-sm">
+                <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-neutral-900 text-white flex items-center justify-center">
+                      <Send className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-neutral-900 flex items-center gap-2">
+                        Opção 1: Enviar Atualizações Direto para o GitHub
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded-full">
+                          Recomendado
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-neutral-500">
+                        Faz o commit e push de todos os arquivos modificados usando a API do GitHub
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-neutral-700 mb-1">
+                      Repositório no GitHub:
+                    </label>
+                    <input
+                      type="text"
+                      value={ghRepo}
+                      onChange={(e) => setGhRepo(e.target.value)}
+                      placeholder="seu-usuario/seu-repositorio"
+                      className="w-full px-3 py-2 border border-neutral-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-neutral-900 focus:outline-none bg-neutral-50"
+                    />
+                    <span className="text-[10px] text-neutral-400">Ex: geraldosaantos-lgtm/saantos</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-neutral-700 mb-1">
+                      Branch de Destino:
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <GitBranch className="w-4 h-4 text-neutral-400 shrink-0" />
+                      <input
+                        type="text"
+                        value={ghBranch}
+                        onChange={(e) => setGhBranch(e.target.value)}
+                        placeholder="main"
+                        className="w-full px-3 py-2 border border-neutral-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-neutral-900 focus:outline-none bg-neutral-50"
+                      />
+                    </div>
+                    <span className="text-[10px] text-neutral-400">Padrão da Vercel: main</span>
+                  </div>
+                </div>
+
+                {/* Token PAT */}
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[11px] font-semibold text-neutral-700">
+                      GitHub Personal Access Token (PAT):
+                    </label>
+                    <a
+                      href="https://github.com/settings/tokens/new?scopes=repo&description=AutoLava+Deploy"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] text-blue-600 hover:text-blue-800 underline font-medium flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Gerar Token no GitHub (1 clique com permissão &apos;repo&apos;)
+                    </a>
+                  </div>
+
+                  <div className="relative">
+                    <input
+                      type={showGhToken ? 'text' : 'password'}
+                      value={ghToken}
+                      onChange={(e) => setGhToken(e.target.value)}
+                      placeholder="Cole aqui seu token: ghp_xxxxxxxxxxxxxxxxxxxx"
+                      className="w-full pl-3 pr-20 py-2 border border-neutral-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-neutral-900 focus:outline-none"
+                    />
+                    <div className="absolute right-2 top-1.5 flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowGhToken(!showGhToken)}
+                        className="p-1 text-neutral-400 hover:text-neutral-700 rounded"
+                        title={showGhToken ? 'Ocultar Token' : 'Mostrar Token'}
+                      >
+                        {showGhToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-neutral-500">
+                    O token precisa da permissão <strong>repo</strong> marcada. Ele é guardado com segurança apenas no armazenamento local do seu próprio navegador.
+                  </p>
+                </div>
+
+                {/* Mensagem do commit */}
+                <div className="text-xs">
+                  <label className="block text-[11px] font-semibold text-neutral-700 mb-1">
+                    Mensagem da Atualização (Commit):
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <GitCommit className="w-4 h-4 text-neutral-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={ghCommitMsg}
+                      onChange={(e) => setGhCommitMsg(e.target.value)}
+                      placeholder="Ex: Atualizações do sistema: nova tela e correções"
+                      className="w-full px-3 py-2 border border-neutral-300 rounded-lg text-xs focus:ring-2 focus:ring-neutral-900 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Feedback e Resultados */}
+                {ghSaveFeedback && (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{ghSaveFeedback}</span>
+                  </div>
+                )}
+
+                {ghPushProgress && (
+                  <div className="p-3 bg-neutral-900 text-white rounded-lg text-xs flex items-center gap-2.5 animate-pulse font-mono">
+                    <RefreshCw className="w-4 h-4 animate-spin shrink-0 text-emerald-400" />
+                    <span>{ghPushProgress}</span>
+                  </div>
+                )}
+
+                {ghPushResult && (
+                  <div
+                    className={`p-3.5 rounded-lg border text-xs space-y-2 ${
+                      ghPushResult.success
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                        : 'bg-red-50 border-red-300 text-red-900'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      {ghPushResult.success ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <XCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                      )}
+                      <div className="flex-1 space-y-1">
+                        <p className="font-bold text-sm">
+                          {ghPushResult.success
+                            ? '🚀 Código Enviado com Sucesso para o GitHub!'
+                            : 'Erro ao Enviar para o GitHub'}
+                        </p>
+                        <p className="text-[11px] leading-relaxed">
+                          {ghPushResult.success
+                            ? `Foram enviados ${ghPushResult.filesCount || 'todos os'} arquivos do sistema para a branch ${ghBranch}. Se você conectou seu repositório na Vercel, o novo deploy em produção já começou!`
+                            : ghPushResult.error}
+                        </p>
+
+                        {ghPushResult.commitUrl && (
+                          <div className="pt-2 flex flex-wrap items-center gap-2">
+                            <a
+                              href={ghPushResult.commitUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-md text-[11px] flex items-center gap-1.5 shadow-xs transition-colors"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              Ver Commit no GitHub ({ghPushResult.commitSha})
+                            </a>
+                            <a
+                              href="https://vercel.com"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 text-white font-semibold rounded-md text-[11px] flex items-center gap-1.5 shadow-xs transition-colors"
+                            >
+                              <Cloud className="w-3.5 h-3.5" />
+                              Acompanhar Deploy na Vercel ↗
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Botões de Ação */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handlePushToGitHub}
+                    disabled={ghPushing}
+                    className={`flex-1 min-w-[200px] px-4 py-2.5 rounded-lg text-xs font-bold text-white transition-all shadow-sm flex items-center justify-center gap-2 ${
+                      ghPushing
+                        ? 'bg-neutral-400 cursor-not-allowed'
+                        : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99]'
+                    }`}
+                  >
+                    {ghPushing ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Enviando para o GitHub...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        <span>Enviar Atualizações para o GitHub Agora</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveGitHubConfig}
+                    className="px-3 py-2.5 border border-neutral-300 hover:bg-neutral-100 rounded-lg text-xs font-semibold text-neutral-700 transition-colors"
+                    title="Salvar token e repositório no navegador"
+                  >
+                    Salvar Dados
+                  </button>
+                </div>
               </div>
 
-              <div className="border border-neutral-200 rounded-lg p-3.5 bg-white space-y-3 text-xs">
+              {/* OPÇÃO 2: DOWNLOAD DO PROJETO EM ZIP */}
+              <div className="border border-neutral-200 rounded-xl p-4 bg-neutral-50 space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-neutral-200 text-neutral-800 flex items-center justify-center">
+                      <FolderArchive className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-neutral-900">
+                        Opção 2: Baixar Código Completo (.ZIP)
+                      </h4>
+                      <p className="text-[11px] text-neutral-500">
+                        Baixe o arquivo compactado com todo o sistema atualizado
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadZip}
+                    disabled={ghDownloadingZip}
+                    className="px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 text-white font-semibold rounded-lg text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+                  >
+                    {ghDownloadingZip ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Compactando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Baixar Projeto (.ZIP)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-neutral-600 leading-relaxed">
+                  Se você preferir não usar token, baixe o arquivo <code>.zip</code> e envie pelo navegador acessando{' '}
+                  <a
+                    href={`https://github.com/${ghRepo || 'geraldosaantos-lgtm/saantos'}/upload/${ghBranch || 'main'}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 underline font-medium"
+                  >
+                    github.com/{ghRepo || 'seu-repo'}/upload/{ghBranch || 'main'}
+                  </a>{' '}
+                  (basta arrastar e soltar os arquivos no site do GitHub).
+                </p>
+              </div>
+
+              {/* OPÇÃO 3: COMANDOS DE TERMINAL */}
+              <div className="border border-neutral-200 rounded-xl p-4 bg-white space-y-3 text-xs">
                 <h5 className="font-bold text-neutral-900 flex items-center justify-between">
-                  <span>Comandos com o seu Repositório Vinculado:</span>
-                  <span className="text-[10px] text-emerald-700 bg-emerald-100 font-mono px-1.5 py-0.5 rounded">
-                    origin configurado
+                  <span>Opção 3: Enviar pelo Terminal (Git no Computador)</span>
+                  <span className="text-[10px] text-neutral-500 font-mono">
+                    Terminal / CMD
                   </span>
                 </h5>
                 <p className="text-[11px] text-neutral-600">
-                  Repositório: <code className="bg-neutral-100 px-1 py-0.5 rounded font-mono text-neutral-900 font-bold">geraldosaantos-lgtm/saantos</code>
+                  Se você clonou o projeto no seu computador, execute no terminal da pasta do projeto:
                 </p>
 
                 <div className="bg-neutral-950 text-neutral-200 p-3 rounded-lg font-mono text-[11px] space-y-1.5">
-                  <div className="text-neutral-400"># O repositório remoto já está configurado no projeto:</div>
-                  <div className="text-emerald-400">git remote set-url origin https://github.com/geraldosaantos-lgtm/saantos.git</div>
-                  <div className="text-neutral-400 pt-1"># Para enviar todos os arquivos e migrations para o seu repositório:</div>
-                  <div className="text-amber-400 font-bold">git push -u origin main</div>
-                </div>
-
-                <div className="bg-blue-50 border border-blue-200 rounded-md p-2.5 text-[11px] text-blue-900 space-y-1">
-                  <p className="font-semibold">Pediu senha ao rodar o git push?</p>
-                  <p className="text-blue-800">
-                    O GitHub não aceita mais a senha comum da conta no terminal. Ele exige um <strong>Personal Access Token (PAT)</strong> ou chave SSH:
-                  </p>
-                  <ol className="list-decimal list-inside text-blue-800 space-y-0.5">
-                    <li>Vá em: <strong>GitHub &gt; Settings &gt; Developer Settings &gt; Personal access tokens &gt; Tokens (classic)</strong>.</li>
-                    <li>Gere um token com permissão <strong>repo</strong> marcada.</li>
-                    <li>Quando o terminal pedir a senha, cole esse token no lugar da senha!</li>
-                  </ol>
+                  <div className="text-neutral-400"># 1. Configurar o repositório remoto:</div>
+                  <div className="text-emerald-400">git remote set-url origin https://github.com/{ghRepo || 'geraldosaantos-lgtm/saantos'}.git</div>
+                  <div className="text-neutral-400 pt-1"># 2. Adicionar arquivos modificados e commitar:</div>
+                  <div className="text-neutral-300">git add .</div>
+                  <div className="text-neutral-300">git commit -m &quot;{ghCommitMsg || 'Atualizacoes do Lava Jato'}&quot;</div>
+                  <div className="text-neutral-400 pt-1"># 3. Enviar para a branch principal:</div>
+                  <div className="text-amber-400 font-bold">git push -u origin {ghBranch || 'main'}</div>
                 </div>
               </div>
             </div>

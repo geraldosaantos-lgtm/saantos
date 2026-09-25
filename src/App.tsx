@@ -18,6 +18,7 @@ import {
   deleteClientFromSupabase,
   syncLaunchToSupabase,
   deleteLaunchFromSupabase,
+  clearAllLaunchesFromSupabase,
   syncGoalsToSupabase,
   uploadAllLocalDataToSupabase,
 } from './services/supabaseService';
@@ -45,7 +46,8 @@ import {
   Database,
   MoreHorizontal,
   RefreshCw,
-  Check
+  Check,
+  Github
 } from 'lucide-react';
 
 export default function App() {
@@ -60,6 +62,7 @@ export default function App() {
   const [isSupabaseOnline, setIsSupabaseOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
+  const [infraInitialTab, setInfraInitialTab] = useState<'supabase' | 'migrations' | 'sql' | 'vercel' | 'github'>('supabase');
 
   // Inicialização e Sincronização em Tempo Real (Celular + Computador)
   useEffect(() => {
@@ -72,18 +75,24 @@ export default function App() {
     // 1. Carrega dados do Supabase e sincroniza bidirecionalmente com o cache local
     const runInitialSync = async () => {
       try {
+        const demoIds = ['lnc-1', 'lnc-2', 'lnc-3'];
+        // Garante a remoção ativa de quaisquer lançamentos de demonstração antigos no Supabase
+        for (const dId of demoIds) {
+          await deleteLaunchFromSupabase(dId);
+        }
+        const supabase = getSupabaseClient();
+        if (supabase) {
+          await supabase.from('service_launches').delete().in('numero_os', ['OS-00101', 'OS-00102', 'OS-00103']);
+        }
+
         const remoteData = await fetchStateFromSupabase();
         if (remoteData) {
           setData((prev) => {
-            const remoteLaunches = remoteData.launches || [];
-            const remoteLaunchIds = new Set(remoteLaunches.map((l) => l.id));
-            const localOnlyLaunches = prev.launches.filter((l) => !remoteLaunchIds.has(l.id));
-
-            // Se este dispositivo tem lançamentos locais que ainda não estão no Supabase (ex: feitos no computador),
-            // envia-os para a nuvem para que o celular veja imediatamente!
-            if (localOnlyLaunches.length > 0) {
-              localOnlyLaunches.forEach((l) => syncLaunchToSupabase(l));
-            }
+            const rawRemoteLaunches = remoteData.launches || [];
+            // Remove demos do retorno remoto
+            const remoteLaunches = rawRemoteLaunches.filter(
+              (l) => !demoIds.includes(l.id) && !['OS-00101', 'OS-00102', 'OS-00103'].includes(l.numeroOS)
+            );
 
             // Clientes locais não presentes na nuvem
             const remoteClients = remoteData.clients || [];
@@ -106,14 +115,14 @@ export default function App() {
               syncCompanyToSupabase(prev.company);
             }
 
-            const allLaunches = [...remoteLaunches, ...localOnlyLaunches];
-            allLaunches.sort((a, b) => new Date(b.dataHora).getTime() - new Date(a.dataHora).getTime());
+            const finalLaunches = [...remoteLaunches];
+            finalLaunches.sort((a, b) => new Date(b.dataHora).getTime() - new Date(a.dataHora).getTime());
 
             const merged: AppState = {
               company: remoteData.company?.isConfigured ? remoteData.company : prev.company,
               services: remoteServices.length > 0 ? remoteServices : prev.services,
               clients: remoteClients.length > 0 ? remoteClients : prev.clients,
-              launches: allLaunches,
+              launches: finalLaunches,
               goals: remoteData.goals || prev.goals,
             };
 
@@ -138,9 +147,13 @@ export default function App() {
           { event: '*', schema: 'public', table: 'service_launches' },
           () => {
             fetchStateFromSupabase().then((remote) => {
-              if (remote?.launches) {
+              if (remote && Array.isArray(remote.launches)) {
+                const demoIds = ['lnc-1', 'lnc-2', 'lnc-3'];
+                const cleanRemote = remote.launches.filter(
+                  (l) => !demoIds.includes(l.id) && !['OS-00101', 'OS-00102', 'OS-00103'].includes(l.numeroOS)
+                );
                 setData((prev) => {
-                  const updated = { ...prev, launches: remote.launches! };
+                  const updated = { ...prev, launches: cleanRemote };
                   saveStoredData(updated);
                   return updated;
                 });
@@ -179,11 +192,17 @@ export default function App() {
       const remote = await fetchStateFromSupabase();
       if (remote) {
         setData((prev) => {
+          const rawRemoteLaunches = remote.launches || [];
+          const cleanRemote = rawRemoteLaunches.filter(
+            (l) =>
+              !['lnc-1', 'lnc-2', 'lnc-3'].includes(l.id) &&
+              !['OS-00101', 'OS-00102', 'OS-00103'].includes(l.numeroOS)
+          );
           const merged: AppState = {
             company: remote.company?.isConfigured ? remote.company : prev.company,
             services: remote.services?.length ? remote.services : prev.services,
             clients: remote.clients?.length ? remote.clients : prev.clients,
-            launches: remote.launches?.length ? remote.launches : prev.launches,
+            launches: Array.isArray(remote.launches) ? cleanRemote : prev.launches,
             goals: remote.goals || prev.goals,
           };
           saveStoredData(merged);
@@ -253,6 +272,17 @@ export default function App() {
       launches: prev.launches.filter((l) => l.id !== id),
     }));
     deleteLaunchFromSupabase(id);
+  };
+
+  const handleClearAllLaunches = async () => {
+    updateData((prev) => ({
+      ...prev,
+      launches: [],
+    }));
+    data.launches.forEach((l) => {
+      deleteLaunchFromSupabase(l.id);
+    });
+    await clearAllLaunchesFromSupabase();
   };
 
   const handleEditLaunch = (launch: ServiceLaunch) => {
@@ -392,7 +422,10 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setIsInfraModalOpen(true)}
+              onClick={() => {
+                setInfraInitialTab('supabase');
+                setIsInfraModalOpen(true);
+              }}
               className={`px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap border ${
                 isSupabaseOnline
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
@@ -404,6 +437,19 @@ export default function App() {
               <span className="hidden sm:inline">
                 {isSupabaseOnline ? 'Nuvem Conectada' : 'Infra / Supabase'}
               </span>
+            </button>
+
+            {/* Botão GitHub Dedicado */}
+            <button
+              onClick={() => {
+                setInfraInitialTab('github');
+                setIsInfraModalOpen(true);
+              }}
+              className="px-2.5 sm:px-3 py-2 text-xs font-semibold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-2xs"
+              title="Salvar alterações no GitHub / Baixar código atualizado"
+            >
+              <Github className="w-3.5 h-3.5 text-neutral-900" />
+              <span className="hidden sm:inline">GitHub</span>
             </button>
 
             <button
@@ -503,12 +549,25 @@ export default function App() {
               <button
                 onClick={() => {
                   setMobileMenuOpen(false);
+                  setInfraInitialTab('supabase');
                   setIsInfraModalOpen(true);
                 }}
                 className="w-full px-3 py-2.5 text-xs font-medium rounded-lg flex items-center gap-2.5 text-neutral-700 hover:bg-neutral-50"
               >
                 <Database className={`w-4 h-4 ${isSupabaseOnline ? 'text-emerald-600' : 'text-neutral-500'}`} />
                 {isSupabaseOnline ? 'Nuvem Conectada (Supabase)' : 'Configurar Supabase'}
+              </button>
+
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setInfraInitialTab('github');
+                  setIsInfraModalOpen(true);
+                }}
+                className="w-full px-3 py-2.5 text-xs font-semibold rounded-lg flex items-center gap-2.5 text-neutral-900 bg-neutral-100 hover:bg-neutral-200"
+              >
+                <Github className="w-4 h-4 text-neutral-900" />
+                <span>Salvar Alterações no GitHub</span>
               </button>
             </div>
           </div>
@@ -564,6 +623,7 @@ export default function App() {
             }}
             onEditLaunch={handleEditLaunch}
             onDeleteLaunch={handleDeleteLaunch}
+            onClearAllLaunches={handleClearAllLaunches}
           />
         )}
 
@@ -636,6 +696,7 @@ export default function App() {
           setData(newState);
           saveStoredData(newState);
         }}
+        initialTab={infraInitialTab}
       />
 
       {/* Footer discreto */}

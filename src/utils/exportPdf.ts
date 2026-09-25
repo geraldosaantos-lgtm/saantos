@@ -103,14 +103,15 @@ export const exportReportToPdf = (
 
   // Cabeçalho das Colunas da Tabela
   const tableHeaders = [
-    { title: 'Data/Hora', width: 26, align: 'left' },
-    { title: 'OS', width: 18, align: 'left' },
-    { title: 'Veículo (Placa / Modelo)', width: 44, align: 'left' },
-    { title: 'KM', width: 16, align: 'left' },
-    { title: 'Serviços Realizados', width: 62, align: 'left' },
+    { title: 'Data/Hora', width: 23, align: 'left' },
+    { title: 'OS', width: 16, align: 'left' },
+    { title: 'Contrato / CC', width: 26, align: 'left' },
+    { title: 'Veículo (Placa / Modelo)', width: 40, align: 'left' },
+    { title: 'KM', width: 14, align: 'left' },
+    { title: 'Serviços Realizados', width: 56, align: 'left' },
     { title: 'Valor', width: 22, align: 'right' },
-    { title: 'Condutor / Matrícula', width: 45, align: 'left' },
-    { title: 'Assinatura', width: 35, align: 'center' },
+    { title: 'Condutor / Matrícula', width: 42, align: 'left' },
+    { title: 'Assinatura', width: 34, align: 'center' },
   ];
 
   const drawTableHeader = (yPos: number) => {
@@ -179,49 +180,58 @@ export const exportReportToPdf = (
     doc.text(launch.numeroOS, x, currentY + 6);
     x += tableHeaders[1].width;
 
-    // 3. Veículo (Placa / Modelo)
+    // 3. Contrato / Centro de Custo
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(30, 41, 59);
+    const ccText = launch.contratoCentroCusto || '-';
+    const splitCC = doc.splitTextToSize(ccText, tableHeaders[2].width - 2);
+    doc.text(splitCC.slice(0, 2), x, currentY + 5);
+    x += tableHeaders[2].width;
+
+    // 4. Veículo (Placa / Modelo)
     doc.setFont('helvetica', 'bold');
     doc.text(launch.placa, x, currentY + 5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
-    const splitModelo = doc.splitTextToSize(launch.modelo, tableHeaders[2].width - 3);
+    const splitModelo = doc.splitTextToSize(launch.modelo, tableHeaders[3].width - 3);
     doc.text(splitModelo[0] || '', x, currentY + 9);
-    x += tableHeaders[2].width;
-
-    // 4. KM
-    doc.setFontSize(7);
-    doc.text(`${launch.km} km`, x, currentY + 6);
     x += tableHeaders[3].width;
 
-    // 5. Serviços Realizados
-    doc.setFontSize(6.5);
-    const servStr = launch.servicos.map((s) => s.nome).join(', ');
-    const splitServ = doc.splitTextToSize(servStr, tableHeaders[4].width - 3);
-    doc.text(splitServ.slice(0, 2), x, currentY + 5);
+    // 5. KM
+    doc.setFontSize(7);
+    doc.text(`${launch.km} km`, x, currentY + 6);
     x += tableHeaders[4].width;
 
-    // 6. Valor Total
+    // 6. Serviços Realizados
+    doc.setFontSize(6.5);
+    const servStr = launch.servicos.map((s) => s.nome).join(', ');
+    const splitServ = doc.splitTextToSize(servStr, tableHeaders[5].width - 3);
+    doc.text(splitServ.slice(0, 2), x, currentY + 5);
+    x += tableHeaders[5].width;
+
+    // 7. Valor Total
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
-    doc.text(formatCurrency(launch.valorTotal), x + tableHeaders[5].width - 2, currentY + 6, {
+    doc.text(formatCurrency(launch.valorTotal), x + tableHeaders[6].width - 2, currentY + 6, {
       align: 'right',
     });
-    x += tableHeaders[5].width;
+    x += tableHeaders[6].width;
 
-    // 7. Condutor / Matrícula
+    // 8. Condutor / Matrícula
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
     doc.setTextColor(30, 41, 59);
-    const splitCond = doc.splitTextToSize(launch.nomeCondutor, tableHeaders[6].width - 3);
+    const splitCond = doc.splitTextToSize(launch.nomeCondutor, tableHeaders[7].width - 3);
     doc.text(splitCond[0] || '', x, currentY + 5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.setTextColor(71, 85, 105);
     doc.text(`Matrícula: ${launch.matriculaCondutor}`, x, currentY + 9);
-    x += tableHeaders[6].width;
+    x += tableHeaders[7].width;
 
-    // 8. Assinatura do Condutor
+    // 9. Assinatura do Condutor
     if (launch.assinatura && launch.assinatura.startsWith('data:image')) {
       try {
         doc.addImage(launch.assinatura, 'PNG', x + 2, currentY + 1.5, 30, 11);

@@ -35,6 +35,7 @@ export const exportReportToExcel = (
       'Data / Hora',
       'Nº OS',
       'Cliente',
+      'Contrato / Centro de Custo',
       'Placa',
       'Modelo do Veículo',
       'KM',
@@ -59,6 +60,7 @@ export const exportReportToExcel = (
       formatDateTime(l.dataHora),
       l.numeroOS,
       l.clienteNome,
+      l.contratoCentroCusto || '-',
       l.placa,
       l.modelo,
       l.km,
@@ -82,6 +84,7 @@ export const exportReportToExcel = (
     '',
     '',
     '',
+    '',
     Number(totalGeral.toFixed(2)),
     '',
     '',
@@ -97,6 +100,7 @@ export const exportReportToExcel = (
     { wch: 18 }, // Data/Hora
     { wch: 12 }, // OS
     { wch: 26 }, // Cliente
+    { wch: 24 }, // Contrato / Centro de Custo
     { wch: 12 }, // Placa
     { wch: 22 }, // Modelo
     { wch: 10 }, // KM

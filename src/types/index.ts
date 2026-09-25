@@ -64,6 +64,7 @@ export interface ServiceLaunch {
   responsavel: string;
   nomeCondutor: string;
   matriculaCondutor: string;
+  contratoCentroCusto?: string; // Contrato ou Centro de Custo para controle de frotas e relatórios
   servicos: ServiceItemLaunch[];
   valorTotal: number;
   assinatura: string; // Base64 dataURL PNG
