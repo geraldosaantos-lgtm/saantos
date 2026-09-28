@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Client, ServiceItem, ServiceLaunch, ServiceItemLaunch } from '../types';
 import { SignaturePad } from './SignaturePad';
-import { formatCurrency, formatPlate } from '../utils/storage';
-import { X, Plus, Trash2, CheckCircle, Car } from 'lucide-react';
+import { formatCurrency, formatPlate, getLocalDateString, getLocalTimeString, combineDateTimeToIso } from '../utils/storage';
+import { X, Plus, Trash2, CheckCircle, Car, Calendar, Clock } from 'lucide-react';
 
 interface LancamentoModalProps {
   isOpen: boolean;
@@ -21,6 +21,8 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   onSave,
   existingLaunch = null,
 }) => {
+  const [dataAtendimento, setDataAtendimento] = useState('');
+  const [horaAtendimento, setHoraAtendimento] = useState('');
   const [clienteId, setClienteId] = useState('');
   const [placa, setPlaca] = useState('');
   const [modelo, setModelo] = useState('');
@@ -35,9 +37,26 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   const [selectedServiceToAdd, setSelectedServiceToAdd] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Define data e hora atuais
+  const handleSetCurrentDateTime = () => {
+    const now = new Date();
+    setDataAtendimento(getLocalDateString(now));
+    setHoraAtendimento(getLocalTimeString(now));
+  };
+
   // Sincroniza estado se for edição ou novo
   useEffect(() => {
     if (existingLaunch) {
+      if (existingLaunch.dataHora) {
+        const d = new Date(existingLaunch.dataHora);
+        setDataAtendimento(getLocalDateString(d));
+        setHoraAtendimento(getLocalTimeString(d));
+      } else {
+        const now = new Date();
+        setDataAtendimento(getLocalDateString(now));
+        setHoraAtendimento(getLocalTimeString(now));
+      }
+
       setClienteId(existingLaunch.clienteId);
       setPlaca(existingLaunch.placa);
       setModelo(existingLaunch.modelo);
@@ -50,7 +69,11 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       setAssinatura(existingLaunch.assinatura);
       setItensServico(existingLaunch.servicos);
     } else {
-      // Padrões para novo lançamento
+      // Padrões para novo lançamento: data e hora atuais pré-preenchidas
+      const now = new Date();
+      setDataAtendimento(getLocalDateString(now));
+      setHoraAtendimento(getLocalTimeString(now));
+
       const firstCli = clients[0]?.id || '';
       setClienteId(firstCli);
       setPlaca('');
@@ -168,6 +191,11 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!dataAtendimento.trim() || !horaAtendimento.trim()) {
+      setErrorMsg('Por favor, informe a Data e o Horário do atendimento.');
+      return;
+    }
+
     if (!placa.trim() || !modelo.trim() || !responsavel.trim() || !nomeCondutor.trim()) {
       setErrorMsg('Por favor, preencha todos os campos obrigatórios (Placa, Modelo, Responsável, Nome do Condutor).');
       return;
@@ -186,7 +214,7 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
     const launch: ServiceLaunch = {
       id: existingLaunch ? existingLaunch.id : `lnc-${Date.now()}`,
       numeroOS: existingLaunch ? existingLaunch.numeroOS : `OS-${Math.floor(10000 + Math.random() * 90000)}`,
-      dataHora: existingLaunch ? existingLaunch.dataHora : new Date().toISOString(),
+      dataHora: combineDateTimeToIso(dataAtendimento, horaAtendimento),
       clienteId: currentClient?.id || '',
       clienteNome: currentClient?.nomeFantasia || currentClient?.razaoSocial || 'Cliente Geral',
       clienteCnpj: currentClient?.cnpj || '',
@@ -222,7 +250,7 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
                 {existingLaunch ? `Editar Lançamento #${existingLaunch.numeroOS}` : 'Novo Lançamento de Serviço'}
               </h2>
               <p className="text-[11px] sm:text-xs text-neutral-500">
-                Veículo, condutor, serviços e assinatura digital.
+                Data, veículo, condutor, serviços e assinatura digital.
               </p>
             </div>
           </div>
@@ -246,8 +274,53 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
           {/* Seção 1: Cliente e Veículo */}
           <div>
             <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2.5">
-              1. Cliente & Identificação do Veículo
+              1. Data, Cliente & Identificação do Veículo
             </h3>
+
+            {/* Bloco de Data e Horário (pré-preenchidos com data e hora atuais) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mb-3.5 p-3 bg-neutral-50 rounded-lg border border-neutral-200">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-800 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-neutral-600" />
+                    Data do Atendimento *
+                  </span>
+                  <span className="text-[10px] text-neutral-500 font-normal">Preenchido com a data atual</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={dataAtendimento}
+                  onChange={(e) => setDataAtendimento(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 bg-white font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-neutral-800 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-neutral-600" />
+                    Horário do Atendimento *
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleSetCurrentDateTime}
+                    className="text-[10px] text-blue-600 hover:text-blue-800 underline font-medium"
+                    title="Definir para hora atual"
+                  >
+                    Usar agora
+                  </button>
+                </label>
+                <input
+                  type="time"
+                  required
+                  value={horaAtendimento}
+                  onChange={(e) => setHoraAtendimento(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 bg-white font-mono font-medium"
+                />
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
               <div className="md:col-span-2">
                 <label className="block text-xs font-semibold text-neutral-700 mb-1">

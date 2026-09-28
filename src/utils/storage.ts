@@ -285,3 +285,29 @@ export const getLocalDateString = (d: Date | string = new Date()): string => {
   return `${year}-${month}-${day}`;
 };
 
+// Retorna HH:mm com base no horário local (ex: "14:30")
+export const getLocalTimeString = (d: Date | string = new Date()): string => {
+  const dateObj = typeof d === 'string' ? new Date(d) : d;
+  if (isNaN(dateObj.getTime())) return '';
+  const hours = String(dateObj.getHours()).padStart(2, '0');
+  const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+};
+
+// Combina data (YYYY-MM-DD) e hora (HH:mm) locais em formato ISO preservando a hora exata
+export const combineDateTimeToIso = (dateStr: string, timeStr: string): string => {
+  if (!dateStr) return new Date().toISOString();
+  const time = timeStr && timeStr.trim() ? timeStr.trim() : '00:00';
+  const parts = dateStr.split('-');
+  const timeParts = time.split(':');
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const day = parseInt(parts[2], 10);
+  const hour = parseInt(timeParts[0] || '0', 10);
+  const minute = parseInt(timeParts[1] || '0', 10);
+  const now = new Date();
+  const second = now.getSeconds();
+  const dateObj = new Date(year, month, day, hour, minute, second);
+  return dateObj.toISOString();
+};
+
