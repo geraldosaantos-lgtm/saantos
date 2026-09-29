@@ -2,14 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { Client, ServiceItem, ServiceLaunch, ServiceItemLaunch } from '../types';
 import { SignaturePad } from './SignaturePad';
 import { formatCurrency, formatPlate, getLocalDateString, getLocalTimeString, combineDateTimeToIso } from '../utils/storage';
-import { X, Plus, Trash2, CheckCircle, Car, Calendar, Clock } from 'lucide-react';
+import { X, Plus, Trash2, CheckCircle, Car, Calendar, Clock, Mail } from 'lucide-react';
+
+export interface LaunchEmailOption {
+  sendEmail: boolean;
+  recipientEmail: string;
+  saveToClient?: boolean;
+}
 
 interface LancamentoModalProps {
   isOpen: boolean;
   onClose: () => void;
   clients: Client[];
   services: ServiceItem[];
-  onSave: (launch: ServiceLaunch) => void;
+  onSave: (launch: ServiceLaunch, emailOption?: LaunchEmailOption) => void;
   existingLaunch?: ServiceLaunch | null;
 }
 
@@ -36,6 +42,11 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   const [itensServico, setItensServico] = useState<ServiceItemLaunch[]>([]);
   const [selectedServiceToAdd, setSelectedServiceToAdd] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Estados para envio de comprovante por e-mail
+  const [enviarEmail, setEnviarEmail] = useState(true);
+  const [emailDestino, setEmailDestino] = useState('');
+  const [salvarEmailNoCliente, setSalvarEmailNoCliente] = useState(false);
 
   // Define data e hora atuais
   const handleSetCurrentDateTime = () => {
@@ -68,6 +79,12 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       setObservacoes(existingLaunch.observacoes || '');
       setAssinatura(existingLaunch.assinatura);
       setItensServico(existingLaunch.servicos);
+
+      // Email do cliente para lançamento existente
+      const cliFound = clients.find((c) => c.id === existingLaunch.clienteId);
+      setEmailDestino(cliFound?.email || '');
+      setEnviarEmail(Boolean(cliFound?.email));
+      setSalvarEmailNoCliente(!cliFound?.email);
     } else {
       // Padrões para novo lançamento: data e hora atuais pré-preenchidas
       const now = new Date();
@@ -85,6 +102,12 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       setContratoCentroCusto('');
       setObservacoes('');
       setAssinatura('');
+
+      // Sincroniza e-mail do primeiro cliente
+      const firstCliObj = clients.find((c) => c.id === firstCli);
+      setEmailDestino(firstCliObj?.email || '');
+      setEnviarEmail(Boolean(firstCliObj?.email));
+      setSalvarEmailNoCliente(!firstCliObj?.email);
 
       // Pré-seleciona primeiro serviço da tabela do cliente
       if (firstCli && services.length > 0) {
@@ -122,6 +145,12 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   const handleClientChange = (newClientId: string) => {
     setClienteId(newClientId);
     const newClient = clients.find((c) => c.id === newClientId);
+
+    // Atualiza dados de e-mail ao trocar de cliente
+    setEmailDestino(newClient?.email || '');
+    setEnviarEmail(Boolean(newClient?.email));
+    setSalvarEmailNoCliente(!newClient?.email);
+
     // Atualiza os preços dos serviços já selecionados de acordo com a tabela do novo cliente
     setItensServico((prev) =>
       prev.map((item) => {
@@ -211,6 +240,11 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       return;
     }
 
+    if (enviarEmail && !emailDestino.trim()) {
+      setErrorMsg('Por favor, informe o e-mail do cliente ou desmarque a opção de envio por e-mail.');
+      return;
+    }
+
     const launch: ServiceLaunch = {
       id: existingLaunch ? existingLaunch.id : `lnc-${Date.now()}`,
       numeroOS: existingLaunch ? existingLaunch.numeroOS : `OS-${Math.floor(10000 + Math.random() * 90000)}`,
@@ -232,7 +266,11 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       status: 'Concluído',
     };
 
-    onSave(launch);
+    onSave(launch, {
+      sendEmail: enviarEmail,
+      recipientEmail: emailDestino.trim(),
+      saveToClient: salvarEmailNoCliente,
+    });
     onClose();
   };
 
@@ -584,6 +622,93 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
               onChange={(e) => setObservacoes(e.target.value)}
               className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900"
             />
+          </div>
+
+          {/* Seção 6: Envio de Mensagem para o E-mail do Cliente */}
+          <div className="pt-3 border-t border-neutral-200">
+            <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3.5 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enviarEmail}
+                    onChange={(e) => setEnviarEmail(e.target.checked)}
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-neutral-300"
+                  />
+                  <span className="text-xs font-bold text-neutral-900 flex items-center gap-1.5">
+                    <Mail className="w-4 h-4 text-blue-600" />
+                    Enviar mensagem por e-mail para o cliente ao finalizar
+                  </span>
+                </label>
+                {currentClient?.email ? (
+                  <span className="text-[10px] text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-full font-medium self-start sm:self-auto">
+                    ✓ E-mail cadastrado
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-amber-700 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full font-medium self-start sm:self-auto">
+                    Sem e-mail salvo
+                  </span>
+                )}
+              </div>
+
+              {enviarEmail && (
+                <div className="space-y-2.5 pt-2 border-t border-blue-200/60">
+                  <div>
+                    <label className="block text-[11px] font-bold text-neutral-800 mb-1">
+                      E-mail de Destino do Cliente:
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="email"
+                        value={emailDestino}
+                        onChange={(e) => setEmailDestino(e.target.value)}
+                        placeholder="Digite o e-mail do cliente (ex: contato@empresa.com)"
+                        className="w-full pl-8 pr-3 py-2 text-xs bg-white border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-neutral-900"
+                      />
+                      <Mail className="w-4 h-4 text-neutral-400 absolute left-2.5 top-2.5" />
+                    </div>
+
+                    {!currentClient?.email && (
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          id="saveClientEmailCheckModal"
+                          checked={salvarEmailNoCliente}
+                          onChange={(e) => setSalvarEmailNoCliente(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded text-blue-600 border-neutral-300"
+                        />
+                        <label htmlFor="saveClientEmailCheckModal" className="text-[10px] text-neutral-600 cursor-pointer">
+                          Salvar este e-mail no cadastro permanente de <strong>{currentClient?.nomeFantasia || 'Cliente'}</strong>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Prévia dos campos obrigatórios da mensagem */}
+                  <div className="bg-white/80 p-2.5 rounded-lg border border-blue-100 text-[11px] space-y-1 text-neutral-700">
+                    <p className="font-semibold text-blue-900 flex items-center gap-1">
+                      📋 Conteúdo da mensagem a ser enviada ao cliente:
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 text-[10px] text-neutral-600 pt-1">
+                      <div className="bg-neutral-50 p-1.5 rounded border border-neutral-200">
+                        <span className="text-neutral-400 block">Data e Hora:</span>
+                        <strong className="text-neutral-900">{dataAtendimento || 'Hoje'} às {horaAtendimento || '--:--'}</strong>
+                      </div>
+                      <div className="bg-neutral-50 p-1.5 rounded border border-neutral-200">
+                        <span className="text-neutral-400 block">Condutor:</span>
+                        <strong className="text-neutral-900 truncate block">{nomeCondutor || '(A informar)'}</strong>
+                      </div>
+                      <div className="bg-neutral-50 p-1.5 rounded border border-neutral-200">
+                        <span className="text-neutral-400 block">Serviços:</span>
+                        <strong className="text-neutral-900 truncate block">
+                          {itensServico.length > 0 ? `${itensServico.length} serviço(s)` : '(Nenhum)'}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Ações */}

@@ -11,7 +11,8 @@ import {
   X,
   CheckCircle2,
   Eye,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Mail,
 } from 'lucide-react';
 
 interface LancamentosViewProps {
@@ -20,6 +21,7 @@ interface LancamentosViewProps {
   onEditLaunch: (launch: ServiceLaunch) => void;
   onDeleteLaunch: (id: string) => void;
   onClearAllLaunches?: () => void;
+  onSendEmail?: (launch: ServiceLaunch) => void;
 }
 
 export const LancamentosView: React.FC<LancamentosViewProps> = ({
@@ -28,6 +30,7 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
   onEditLaunch,
   onDeleteLaunch,
   onClearAllLaunches,
+  onSendEmail,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSignature, setSelectedSignature] = useState<{
@@ -176,17 +179,27 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
             </div>
 
             {/* Botões de Ação para Celular */}
-            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-neutral-100">
+            <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-neutral-100">
+              {onSendEmail && (
+                <button
+                  onClick={() => onSendEmail(l)}
+                  className="py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center justify-center gap-1 transition-colors"
+                  title="Enviar comprovante por e-mail"
+                >
+                  <Mail className="w-3.5 h-3.5 text-blue-600" />
+                  E-mail
+                </button>
+              )}
               <button
                 onClick={() => onEditLaunch(l)}
-                className="py-2 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg flex items-center justify-center gap-1.5 transition-colors"
+                className="py-2 text-xs font-medium text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-lg flex items-center justify-center gap-1 transition-colors"
               >
                 <Edit2 className="w-3.5 h-3.5 text-neutral-600" />
                 Editar
               </button>
               <button
                 onClick={() => setLaunchToDelete(l)}
-                className="py-2 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg flex items-center justify-center gap-1.5 transition-colors"
+                className="py-2 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg flex items-center justify-center gap-1 transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5 text-red-600" />
                 Excluir
@@ -287,6 +300,15 @@ export const LancamentosView: React.FC<LancamentosViewProps> = ({
                   </td>
                   <td className="py-2.5 px-3 text-center">
                     <div className="flex items-center justify-center gap-1">
+                      {onSendEmail && (
+                        <button
+                          onClick={() => onSendEmail(l)}
+                          title="Enviar comprovante por e-mail"
+                          className="p-1 text-neutral-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <button
                         onClick={() => onEditLaunch(l)}
                         title="Editar Lançamento"

@@ -24,13 +24,14 @@ import {
 } from './services/supabaseService';
 import { DashboardHome } from './components/DashboardHome';
 import { LancamentosView } from './components/LancamentosView';
-import { LancamentoModal } from './components/LancamentoModal';
+import { LancamentoModal, LaunchEmailOption } from './components/LancamentoModal';
 import { ClientesView } from './components/ClientesView';
 import { ServicosView } from './components/ServicosView';
 import { MetasView } from './components/MetasView';
 import { RelatoriosView } from './components/RelatoriosView';
 import { CompanyModal } from './components/CompanyModal';
 import { InfraModal } from './components/InfraModal';
+import { EmailModal } from './components/EmailModal';
 import {
   Car,
   Users,
@@ -58,6 +59,11 @@ export default function App() {
   const [isLancamentoModalOpen, setIsLancamentoModalOpen] = useState(false);
   const [isInfraModalOpen, setIsInfraModalOpen] = useState(false);
   const [editingLaunch, setEditingLaunch] = useState<ServiceLaunch | null>(null);
+  const [emailModalData, setEmailModalData] = useState<{
+    isOpen: boolean;
+    launch: ServiceLaunch | null;
+    email: string;
+  } | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSupabaseOnline, setIsSupabaseOnline] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -248,7 +254,10 @@ export default function App() {
   };
 
   // Handlers para Lançamentos
-  const handleSaveLaunch = (launch: ServiceLaunch) => {
+  const handleSaveLaunch = (
+    launch: ServiceLaunch,
+    emailOption?: LaunchEmailOption
+  ) => {
     updateData((prev) => {
       const index = prev.launches.findIndex((l) => l.id === launch.id);
       let updatedLaunches = [...prev.launches];
@@ -264,6 +273,24 @@ export default function App() {
     });
     syncLaunchToSupabase(launch);
     setEditingLaunch(null);
+
+    // Se o usuário optou por salvar o e-mail no cadastro do cliente
+    if (emailOption?.saveToClient && emailOption.recipientEmail && launch.clienteId) {
+      const targetCli = data.clients.find((c) => c.id === launch.clienteId);
+      if (targetCli && targetCli.email !== emailOption.recipientEmail) {
+        const updatedCli = { ...targetCli, email: emailOption.recipientEmail };
+        handleSaveClient(updatedCli);
+      }
+    }
+
+    // Se a opção de envio de e-mail estiver marcada, abre modal para envio imediato
+    if (emailOption?.sendEmail && emailOption.recipientEmail) {
+      setEmailModalData({
+        isOpen: true,
+        launch,
+        email: emailOption.recipientEmail,
+      });
+    }
   };
 
   const handleDeleteLaunch = (id: string) => {
@@ -624,6 +651,14 @@ export default function App() {
             onEditLaunch={handleEditLaunch}
             onDeleteLaunch={handleDeleteLaunch}
             onClearAllLaunches={handleClearAllLaunches}
+            onSendEmail={(launch) => {
+              const cli = data.clients.find((c) => c.id === launch.clienteId);
+              setEmailModalData({
+                isOpen: true,
+                launch,
+                email: cli?.email || '',
+              });
+            }}
           />
         )}
 
@@ -698,6 +733,23 @@ export default function App() {
         }}
         initialTab={infraInitialTab}
       />
+
+      {/* Modal: Envio de Comprovante por E-mail */}
+      {emailModalData && (
+        <EmailModal
+          isOpen={emailModalData.isOpen}
+          onClose={() => setEmailModalData(null)}
+          launch={emailModalData.launch}
+          defaultEmail={emailModalData.email}
+          companyName={data.company?.nomeFantasia || data.company?.razaoSocial}
+          onSaveClientEmail={(clientId, newEmail) => {
+            const targetCli = data.clients.find((c) => c.id === clientId);
+            if (targetCli) {
+              handleSaveClient({ ...targetCli, email: newEmail });
+            }
+          }}
+        />
+      )}
 
       {/* Footer discreto */}
       <footer className="mt-auto border-t border-neutral-200 bg-white py-4 px-6 text-center text-xs text-neutral-500 print:hidden hidden md:block">
