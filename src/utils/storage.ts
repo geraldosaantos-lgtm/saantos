@@ -311,3 +311,299 @@ export const combineDateTimeToIso = (dateStr: string, timeStr: string): string =
   return dateObj.toISOString();
 };
 
+/**
+ * Converte qualquer formato de data de lançamento (ISO, YYYY-MM-DD, DD/MM/YYYY)
+ * em um objeto Date seguro no fuso local, evitando que vire o dia por UTC
+ */
+export const parseLaunchDate = (val: string | Date | undefined | null): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  const str = String(val).trim();
+  if (!str) return null;
+
+  // Formato ISO ou YYYY-MM-DD (ex: 2026-09-30 ou 2026-09-30T10:00:00...)
+  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (isoMatch) {
+    const year = parseInt(isoMatch[1], 10);
+    const month = parseInt(isoMatch[2], 10) - 1;
+    const day = parseInt(isoMatch[3], 10);
+    const hour = isoMatch[4] ? parseInt(isoMatch[4], 10) : 12;
+    const minute = isoMatch[5] ? parseInt(isoMatch[5], 10) : 0;
+    const second = isoMatch[6] ? parseInt(isoMatch[6], 10) : 0;
+    return new Date(year, month, day, hour, minute, second);
+  }
+
+  // Formato Brasileiro DD/MM/YYYY (ex: 30/09/2026)
+  const brMatch = str.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
+  if (brMatch) {
+    const day = parseInt(brMatch[1], 10);
+    const month = parseInt(brMatch[2], 10) - 1;
+    const year = parseInt(brMatch[3], 10);
+    const hour = brMatch[4] ? parseInt(brMatch[4], 10) : 12;
+    const minute = brMatch[5] ? parseInt(brMatch[5], 10) : 0;
+    return new Date(year, month, day, hour, minute, 0);
+  }
+
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+/**
+ * Garante que o valor total de um lançamento seja sempre um número válido,
+ * prevenindo NaN por dados vindos como string ou vazios
+ */
+export const getLaunchValue = (l: ServiceLaunch): number => {
+  if (typeof l.valorTotal === 'number' && !isNaN(l.valorTotal)) {
+    return l.valorTotal;
+  }
+  if (typeof l.valorTotal === 'string') {
+    const cleanStr = String(l.valorTotal).replace('R$', '').replace(/\s/g, '').replace(',', '.');
+    const parsed = parseFloat(cleanStr);
+    if (!isNaN(parsed)) return parsed;
+  }
+  if (Array.isArray(l.servicos) && l.servicos.length > 0) {
+    return l.servicos.reduce((acc, s) => {
+      const sub = Number(s.subtotal) || (Number(s.preco) || 0) * (Number(s.quantidade) || 1);
+      return acc + (isNaN(sub) ? 0 : sub);
+    }, 0);
+  }
+  return 0;
+};
+
+/**
+ * Verifica se duas datas correspondem ao mesmo dia civil (ano, mês e dia)
+ */
+export const isSameDay = (d1: Date, d2: Date = new Date()): boolean => {
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+};
+
+/**
+ * Retorna o intervalo da semana (Segunda-feira 00:00 até Domingo 23:59)
+ */
+export const getWeekRange = (baseDate: Date = new Date()) => {
+  const day = baseDate.getDay(); // 0 = Domingo, 1 = Segunda...
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + diffToMonday, 0, 0, 0, 0);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 23, 59, 59, 999);
+  return { start, end };
+};
+
+/**
+ * Verifica se a data pertence à mesma semana civil
+ */
+export const isSameWeek = (d: Date, baseDate: Date = new Date()): boolean => {
+  const { start, end } = getWeekRange(baseDate);
+  const time = d.getTime();
+  return time >= start.getTime() && time <= end.getTime();
+};
+
+/**
+ * Verifica se a data pertence ao mesmo mês civil
+ */
+export const isSameMonth = (d1: Date, d2: Date = new Date()): boolean => {
+  return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth();
+};
+
+export interface LaunchMetrics {
+  totalHoje: number;
+  qtdHoje: number;
+  pctDia: number;
+  totalSemana: number;
+  qtdSemana: number;
+  pctSemana: number;
+  totalMes: number;
+  qtdMes: number;
+  pctMes: number;
+  totalGeral: number;
+  qtdGeral: number;
+  ticketMedioHoje: number;
+  ticketMedioSemana: number;
+  ticketMedioMes: number;
+  taxaAssinatura: number;
+  last7Days: Array<{
+    dateStr: string;
+    dayLabel: string;
+    shortDate: string;
+    total: number;
+    count: number;
+    isToday: boolean;
+  }>;
+  topServices: Array<{
+    id: string;
+    nome: string;
+    quantidade: number;
+    total: number;
+  }>;
+  topClients: Array<{
+    nome: string;
+    quantidade: number;
+    total: number;
+  }>;
+  todayLaunches: ServiceLaunch[];
+  weekLaunches: ServiceLaunch[];
+}
+
+/**
+ * Motor centralizado e à prova de falhas para cálculo de metas e métricas do Dashboard
+ */
+export const calculateLaunchMetrics = (
+  launches: ServiceLaunch[],
+  goals: GoalsConfig,
+  referenceDate: Date = new Date()
+): LaunchMetrics => {
+  const now = referenceDate;
+  const { start: weekStart, end: weekEnd } = getWeekRange(now);
+
+  let totalHoje = 0;
+  let qtdHoje = 0;
+  let totalSemana = 0;
+  let qtdSemana = 0;
+  let totalMes = 0;
+  let qtdMes = 0;
+  let totalGeral = 0;
+  let qtdGeral = 0;
+  let assinados = 0;
+
+  const todayLaunches: ServiceLaunch[] = [];
+  const weekLaunches: ServiceLaunch[] = [];
+
+  // Mapeamento dos últimos 7 dias (do 6º dia atrás até hoje)
+  const daysMap = new Map<string, { date: Date; total: number; count: number; isToday: boolean }>();
+  for (let i = 6; i >= 0; i--) {
+    const dayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12, 0, 0);
+    const key = `${dayDate.getFullYear()}-${String(dayDate.getMonth() + 1).padStart(2, '0')}-${String(dayDate.getDate()).padStart(2, '0')}`;
+    daysMap.set(key, {
+      date: dayDate,
+      total: 0,
+      count: 0,
+      isToday: i === 0,
+    });
+  }
+
+  // Agrupamentos de serviços e clientes
+  const serviceStats = new Map<string, { id: string; nome: string; quantidade: number; total: number }>();
+  const clientStats = new Map<string, { nome: string; quantidade: number; total: number }>();
+
+  launches.forEach((l) => {
+    const val = getLaunchValue(l);
+    totalGeral += val;
+    qtdGeral += 1;
+
+    if (l.assinatura && l.assinatura.trim().length > 10) {
+      assinados += 1;
+    }
+
+    const lDate = parseLaunchDate(l.dataHora);
+    if (!lDate) return;
+
+    // Acumula estatísticas por cliente
+    const cName = l.clienteNome || 'Cliente Geral';
+    const cCurr = clientStats.get(cName) || { nome: cName, quantidade: 0, total: 0 };
+    cCurr.quantidade += 1;
+    cCurr.total += val;
+    clientStats.set(cName, cCurr);
+
+    // Acumula estatísticas por serviço
+    if (Array.isArray(l.servicos)) {
+      l.servicos.forEach((s) => {
+        const sId = s.serviceId || s.nome;
+        const sCurr = serviceStats.get(sId) || {
+          id: sId,
+          nome: s.nome,
+          quantidade: 0,
+          total: 0,
+        };
+        const sSub = Number(s.subtotal) || (Number(s.preco) || 0) * (Number(s.quantidade) || 1);
+        sCurr.quantidade += Number(s.quantidade) || 1;
+        sCurr.total += isNaN(sSub) ? 0 : sSub;
+        serviceStats.set(sId, sCurr);
+      });
+    }
+
+    // HOJE
+    if (isSameDay(lDate, now)) {
+      totalHoje += val;
+      qtdHoje += 1;
+      todayLaunches.push(l);
+    }
+
+    // ESTA SEMANA (Segunda a Domingo)
+    const lTime = lDate.getTime();
+    if (lTime >= weekStart.getTime() && lTime <= weekEnd.getTime()) {
+      totalSemana += val;
+      qtdSemana += 1;
+      weekLaunches.push(l);
+    }
+
+    // ESTE MÊS
+    if (isSameMonth(lDate, now)) {
+      totalMes += val;
+      qtdMes += 1;
+    }
+
+    // Últimos 7 dias
+    const dayKey = `${lDate.getFullYear()}-${String(lDate.getMonth() + 1).padStart(2, '0')}-${String(lDate.getDate()).padStart(2, '0')}`;
+    if (daysMap.has(dayKey)) {
+      const entry = daysMap.get(dayKey)!;
+      entry.total += val;
+      entry.count += 1;
+    }
+  });
+
+  const getPct = (actual: number, target: number) => {
+    if (!target || target <= 0) return 0;
+    return Math.min(100, Math.round((actual / target) * 100));
+  };
+
+  const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const last7Days = Array.from(daysMap.entries()).map(([key, item]) => {
+    const dayOfWeek = item.date.getDay();
+    const dayLabel = dayNames[dayOfWeek];
+    const shortDate = `${String(item.date.getDate()).padStart(2, '0')}/${String(item.date.getMonth() + 1).padStart(2, '0')}`;
+    return {
+      dateStr: key,
+      dayLabel,
+      shortDate,
+      total: item.total,
+      count: item.count,
+      isToday: item.isToday,
+    };
+  });
+
+  const topServices = Array.from(serviceStats.values())
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 6);
+
+  const topClients = Array.from(clientStats.values())
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 5);
+
+  return {
+    totalHoje,
+    qtdHoje,
+    pctDia: getPct(totalHoje, goals.metaDiaria),
+    totalSemana,
+    qtdSemana,
+    pctSemana: getPct(totalSemana, goals.metaSemanal),
+    totalMes,
+    qtdMes,
+    pctMes: getPct(totalMes, goals.metaMensal),
+    totalGeral,
+    qtdGeral,
+    ticketMedioHoje: qtdHoje > 0 ? totalHoje / qtdHoje : 0,
+    ticketMedioSemana: qtdSemana > 0 ? totalSemana / qtdSemana : 0,
+    ticketMedioMes: qtdMes > 0 ? totalMes / qtdMes : 0,
+    taxaAssinatura: qtdGeral > 0 ? Math.round((assinados / qtdGeral) * 100) : 100,
+    last7Days,
+    topServices,
+    topClients,
+    todayLaunches,
+    weekLaunches,
+  };
+};
+
+

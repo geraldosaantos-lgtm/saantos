@@ -1,7 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { GoalsConfig, ServiceLaunch } from '../types';
-import { formatCurrency, getLocalDateString } from '../utils/storage';
-import { Target, TrendingUp, Calendar, Check, Edit3, DollarSign, Car } from 'lucide-react';
+import {
+  formatCurrency,
+  formatDateTime,
+  calculateLaunchMetrics,
+  getWeekRange,
+} from '../utils/storage';
+import {
+  Target,
+  TrendingUp,
+  Calendar,
+  Check,
+  Edit3,
+  DollarSign,
+  Car,
+  CheckCircle2,
+  Clock,
+  Layers,
+  ChevronRight,
+  Filter
+} from 'lucide-react';
 
 interface MetasViewProps {
   goals: GoalsConfig;
@@ -16,51 +34,24 @@ export const MetasView: React.FC<MetasViewProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [formGoals, setFormGoals] = useState<GoalsConfig>({ ...goals });
+  const [activeListTab, setActiveListTab] = useState<'hoje' | 'semana' | 'mes' | 'todos'>('hoje');
 
-  // Calcula faturamento e atendimentos atuais
+  // Sincroniza formulário sempre que goals mudar externamente
+  useEffect(() => {
+    setFormGoals({ ...goals });
+  }, [goals]);
+
+  // Motor centralizado de métricas com suporte a fuso horário e tolerância a dados nulos
+  const metrics = calculateLaunchMetrics(launches, goals);
+
   const now = new Date();
-  const todayStr = getLocalDateString(now);
+  const { start: weekStart, end: weekEnd } = getWeekRange(now);
 
-  // Início da semana (domingo ou segunda)
-  const currentDayOfWeek = now.getDay();
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - currentDayOfWeek);
-  startOfWeek.setHours(0, 0, 0, 0);
+  const formatShortDate = (d: Date) =>
+    `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
 
-  // Início do mês
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-  let totalHoje = 0;
-  let qtdHoje = 0;
-  let totalSemana = 0;
-  let qtdSemana = 0;
-  let totalMes = 0;
-  let qtdMes = 0;
-
-  launches.forEach((l) => {
-    const launchDate = new Date(l.dataHora);
-    const dateStr = getLocalDateString(l.dataHora);
-
-    if (dateStr === todayStr) {
-      totalHoje += l.valorTotal;
-      qtdHoje += 1;
-    }
-
-    if (launchDate >= startOfWeek) {
-      totalSemana += l.valorTotal;
-      qtdSemana += 1;
-    }
-
-    if (launchDate >= startOfMonth) {
-      totalMes += l.valorTotal;
-      qtdMes += 1;
-    }
-  });
-
-  const getPercent = (actual: number, target: number) => {
-    if (!target || target <= 0) return 0;
-    return Math.min(100, Math.round((actual / target) * 100));
-  };
+  const weekRangeLabel = `${formatShortDate(weekStart)} até ${formatShortDate(weekEnd)}`;
+  const monthName = now.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,18 +59,39 @@ export const MetasView: React.FC<MetasViewProps> = ({
     setIsEditing(false);
   };
 
-  const pctDia = getPercent(totalHoje, goals.metaDiaria);
-  const pctSemana = getPercent(totalSemana, goals.metaSemanal);
-  const pctMes = getPercent(totalMes, goals.metaMensal);
+  // Filtra lançamentos exibidos na lista inferior
+  const displayedLaunches = (() => {
+    switch (activeListTab) {
+      case 'hoje':
+        return metrics.todayLaunches;
+      case 'semana':
+        return metrics.weekLaunches;
+      case 'mes':
+        return launches.filter((l) => {
+          const d = new Date(l.dataHora);
+          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        });
+      case 'todos':
+      default:
+        return launches;
+    }
+  })();
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-neutral-900 tracking-tight">Planejamento de Metas</h1>
-          <p className="text-xs text-neutral-500">
-            Defina e acompanhe suas metas operacionais e financeiras por Dia, Semana e Mês.
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 bg-neutral-900 text-white rounded-lg">
+              <Target className="w-4 h-4" />
+            </span>
+            <h1 className="text-xl font-bold text-neutral-900 tracking-tight">
+              Planejamento & Acompanhamento de Metas
+            </h1>
+          </div>
+          <p className="text-xs text-neutral-500 mt-1">
+            Valores atualizados em tempo real para o dia de hoje, a semana atual e o mês.
           </p>
         </div>
         <button
@@ -87,7 +99,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
           className="px-4 py-2 text-xs font-semibold text-neutral-900 bg-white hover:bg-neutral-100 border border-neutral-300 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-xs shrink-0"
         >
           <Edit3 className="w-3.5 h-3.5" />
-          {isEditing ? 'Fechar Edição' : 'Ajustar Valores das Metas'}
+          {isEditing ? 'Fechar Edição' : 'Ajustar Metas (Valores/Qtd)'}
         </button>
       </div>
 
@@ -100,7 +112,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
           <div className="flex items-center gap-2 pb-2 border-b border-neutral-200">
             <Target className="w-4 h-4 text-neutral-900" />
             <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider">
-              Configurar Objetivos Financeiros e Volume de Serviços
+              Definir Metas Financeiras e Quantidade de Veículos
             </h3>
           </div>
 
@@ -135,7 +147,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
                   min="0"
                   value={formGoals.metaDiariaQtd}
                   onChange={(e) =>
-                    setFormGoals({ ...formGoals, metaDiariaQtd: parseInt(e.target.value) || 0 })
+                    setFormGoals({ ...formGoals, metaDiariaQtd: parseInt(e.target.value, 10) || 0 })
                   }
                   className="w-full px-2.5 py-1.5 text-xs font-mono border border-neutral-300 rounded bg-white"
                 />
@@ -172,7 +184,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
                   min="0"
                   value={formGoals.metaSemanalQtd}
                   onChange={(e) =>
-                    setFormGoals({ ...formGoals, metaSemanalQtd: parseInt(e.target.value) || 0 })
+                    setFormGoals({ ...formGoals, metaSemanalQtd: parseInt(e.target.value, 10) || 0 })
                   }
                   className="w-full px-2.5 py-1.5 text-xs font-mono border border-neutral-300 rounded bg-white"
                 />
@@ -209,7 +221,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
                   min="0"
                   value={formGoals.metaMensalQtd}
                   onChange={(e) =>
-                    setFormGoals({ ...formGoals, metaMensalQtd: parseInt(e.target.value) || 0 })
+                    setFormGoals({ ...formGoals, metaMensalQtd: parseInt(e.target.value, 10) || 0 })
                   }
                   className="w-full px-2.5 py-1.5 text-xs font-mono border border-neutral-300 rounded bg-white"
                 />
@@ -239,151 +251,282 @@ export const MetasView: React.FC<MetasViewProps> = ({
       {/* Cards de Acompanhamento do Progresso em Tempo Real */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {/* Meta Diária Card */}
-        <div className="bg-white border border-neutral-200 rounded-xl p-5 shadow-xs space-y-4">
+        <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4 hover:border-neutral-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">
-              Hoje ({new Date().toLocaleDateString('pt-BR')})
+            <span className="text-xs font-bold text-neutral-700 uppercase tracking-wider flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-blue-600" />
+              Meta do Dia
             </span>
-            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-neutral-100 text-neutral-800">
-              {pctDia}% da meta
+            <span
+              className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
+                metrics.pctDia >= 100
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-blue-50 text-blue-700'
+              }`}
+            >
+              {metrics.pctDia}% atingido
             </span>
           </div>
 
           <div>
-            <div className="text-2xl font-bold font-mono text-neutral-900">
-              {formatCurrency(totalHoje)}
+            <div className="text-3xl font-extrabold font-mono text-neutral-950">
+              {formatCurrency(metrics.totalHoje)}
             </div>
-            <div className="text-xs text-neutral-500 mt-0.5">
-              Meta do dia: <span className="font-mono text-neutral-700">{formatCurrency(goals.metaDiaria)}</span>
+            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between">
+              <span>Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaDiaria)}</strong></span>
+              <span className="text-[11px] text-neutral-400">Hoje: {now.toLocaleDateString('pt-BR')}</span>
             </div>
           </div>
 
-          {/* Barra de Progresso */}
-          <div className="space-y-1">
-            <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
+          {/* Barra de Progresso Financeiro */}
+          <div className="space-y-1.5">
+            <div className="w-full bg-neutral-100 rounded-full h-2.5 overflow-hidden">
               <div
-                className="bg-neutral-900 h-2 rounded-full transition-all duration-500"
-                style={{ width: `${pctDia}%` }}
+                className={`h-2.5 rounded-full transition-all duration-500 ${
+                  metrics.pctDia >= 100 ? 'bg-emerald-500' : 'bg-blue-600'
+                }`}
+                style={{ width: `${metrics.pctDia}%` }}
               />
             </div>
-            <div className="flex justify-between text-[11px] text-neutral-500 font-mono">
-              <span>{qtdHoje} veículos atendidos</span>
-              <span>Alvo: {goals.metaDiariaQtd} vcs</span>
+            <div className="flex justify-between items-center text-[11px] text-neutral-600 font-mono">
+              <span className="flex items-center gap-1 font-semibold text-neutral-900">
+                <Car className="w-3 h-3 text-neutral-500" />
+                {metrics.qtdHoje} atendimentos hoje
+              </span>
+              <span className="text-neutral-500">Meta: {goals.metaDiariaQtd} veículos</span>
             </div>
           </div>
         </div>
 
         {/* Meta Semanal Card */}
-        <div className="bg-white border border-neutral-200 rounded-xl p-5 shadow-xs space-y-4">
+        <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4 hover:border-neutral-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">
-              Esta Semana
+            <span className="text-xs font-bold text-neutral-700 uppercase tracking-wider flex items-center gap-1.5">
+              <TrendingUp className="w-3.5 h-3.5 text-purple-600" />
+              Meta da Semana
             </span>
-            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-neutral-100 text-neutral-800">
-              {pctSemana}% da meta
+            <span
+              className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
+                metrics.pctSemana >= 100
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-purple-50 text-purple-700'
+              }`}
+            >
+              {metrics.pctSemana}% atingido
             </span>
           </div>
 
           <div>
-            <div className="text-2xl font-bold font-mono text-neutral-900">
-              {formatCurrency(totalSemana)}
+            <div className="text-3xl font-extrabold font-mono text-neutral-950">
+              {formatCurrency(metrics.totalSemana)}
             </div>
-            <div className="text-xs text-neutral-500 mt-0.5">
-              Meta da semana: <span className="font-mono text-neutral-700">{formatCurrency(goals.metaSemanal)}</span>
+            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between">
+              <span>Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaSemanal)}</strong></span>
+              <span className="text-[11px] text-neutral-400 font-mono">{weekRangeLabel}</span>
             </div>
           </div>
 
-          {/* Barra de Progresso */}
-          <div className="space-y-1">
-            <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
+          {/* Barra de Progresso Financeiro */}
+          <div className="space-y-1.5">
+            <div className="w-full bg-neutral-100 rounded-full h-2.5 overflow-hidden">
               <div
-                className="bg-neutral-900 h-2 rounded-full transition-all duration-500"
-                style={{ width: `${pctSemana}%` }}
+                className={`h-2.5 rounded-full transition-all duration-500 ${
+                  metrics.pctSemana >= 100 ? 'bg-emerald-500' : 'bg-purple-600'
+                }`}
+                style={{ width: `${metrics.pctSemana}%` }}
               />
             </div>
-            <div className="flex justify-between text-[11px] text-neutral-500 font-mono">
-              <span>{qtdSemana} veículos atendidos</span>
-              <span>Alvo: {goals.metaSemanalQtd} vcs</span>
+            <div className="flex justify-between items-center text-[11px] text-neutral-600 font-mono">
+              <span className="flex items-center gap-1 font-semibold text-neutral-900">
+                <Car className="w-3 h-3 text-neutral-500" />
+                {metrics.qtdSemana} atendimentos na semana
+              </span>
+              <span className="text-neutral-500">Meta: {goals.metaSemanalQtd} veículos</span>
             </div>
           </div>
         </div>
 
         {/* Meta Mensal Card */}
-        <div className="bg-white border border-neutral-200 rounded-xl p-5 shadow-xs space-y-4">
+        <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4 hover:border-neutral-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">
-              Este Mês
+            <span className="text-xs font-bold text-neutral-700 uppercase tracking-wider flex items-center gap-1.5">
+              <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+              Meta do Mês
             </span>
-            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-neutral-100 text-neutral-800">
-              {pctMes}% da meta
+            <span
+              className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
+                metrics.pctMes >= 100
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-emerald-50 text-emerald-700'
+              }`}
+            >
+              {metrics.pctMes}% atingido
             </span>
           </div>
 
           <div>
-            <div className="text-2xl font-bold font-mono text-neutral-900">
-              {formatCurrency(totalMes)}
+            <div className="text-3xl font-extrabold font-mono text-neutral-950">
+              {formatCurrency(metrics.totalMes)}
             </div>
-            <div className="text-xs text-neutral-500 mt-0.5">
-              Meta do mês: <span className="font-mono text-neutral-700">{formatCurrency(goals.metaMensal)}</span>
+            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between">
+              <span>Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaMensal)}</strong></span>
+              <span className="text-[11px] text-neutral-400 capitalize">{monthName}</span>
             </div>
           </div>
 
-          {/* Barra de Progresso */}
-          <div className="space-y-1">
-            <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
+          {/* Barra de Progresso Financeiro */}
+          <div className="space-y-1.5">
+            <div className="w-full bg-neutral-100 rounded-full h-2.5 overflow-hidden">
               <div
-                className="bg-neutral-900 h-2 rounded-full transition-all duration-500"
-                style={{ width: `${pctMes}%` }}
+                className={`h-2.5 rounded-full transition-all duration-500 ${
+                  metrics.pctMes >= 100 ? 'bg-emerald-500' : 'bg-emerald-600'
+                }`}
+                style={{ width: `${metrics.pctMes}%` }}
               />
             </div>
-            <div className="flex justify-between text-[11px] text-neutral-500 font-mono">
-              <span>{qtdMes} veículos atendidos</span>
-              <span>Alvo: {goals.metaMensalQtd} vcs</span>
+            <div className="flex justify-between items-center text-[11px] text-neutral-600 font-mono">
+              <span className="flex items-center gap-1 font-semibold text-neutral-900">
+                <Car className="w-3 h-3 text-neutral-500" />
+                {metrics.qtdMes} atendimentos no mês
+              </span>
+              <span className="text-neutral-500">Meta: {goals.metaMensalQtd} veículos</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Tabela de Produtividade Recente */}
-      <div className="bg-white border border-neutral-200 rounded-xl p-5 shadow-xs space-y-3">
-        <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider flex items-center gap-2">
-          <Car className="w-4 h-4 text-neutral-700" />
-          Últimos Veículos Atendidos na Base de Metas
-        </h3>
+      {/* Seção de Transparência: Lançamentos que Compõem as Metas */}
+      <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-100">
+          <div>
+            <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider flex items-center gap-2">
+              <Layers className="w-4 h-4 text-neutral-700" />
+              Detalhamento de Atendimentos Contabilizados
+            </h3>
+            <p className="text-[11px] text-neutral-500">
+              Veja exatamente quais ordens de serviço somaram nos totais de hoje, da semana e do mês.
+            </p>
+          </div>
 
-        <div className="border border-neutral-200 rounded-lg overflow-hidden">
+          {/* Abas de Filtro */}
+          <div className="flex items-center gap-1 bg-neutral-100 p-1 rounded-xl self-start sm:self-auto">
+            <button
+              onClick={() => setActiveListTab('hoje')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 ${
+                activeListTab === 'hoje'
+                  ? 'bg-white text-neutral-950 shadow-2xs font-bold'
+                  : 'text-neutral-600 hover:text-neutral-900'
+              }`}
+            >
+              Hoje ({metrics.qtdHoje})
+            </button>
+            <button
+              onClick={() => setActiveListTab('semana')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 ${
+                activeListTab === 'semana'
+                  ? 'bg-white text-neutral-950 shadow-2xs font-bold'
+                  : 'text-neutral-600 hover:text-neutral-900'
+              }`}
+            >
+              Semana ({metrics.qtdSemana})
+            </button>
+            <button
+              onClick={() => setActiveListTab('mes')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 ${
+                activeListTab === 'mes'
+                  ? 'bg-white text-neutral-950 shadow-2xs font-bold'
+                  : 'text-neutral-600 hover:text-neutral-900'
+              }`}
+            >
+              Mês ({metrics.qtdMes})
+            </button>
+            <button
+              onClick={() => setActiveListTab('todos')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 ${
+                activeListTab === 'todos'
+                  ? 'bg-white text-neutral-950 shadow-2xs font-bold'
+                  : 'text-neutral-600 hover:text-neutral-900'
+              }`}
+            >
+              Todos ({launches.length})
+            </button>
+          </div>
+        </div>
+
+        {/* Tabela de Ordens */}
+        <div className="border border-neutral-200 rounded-xl overflow-hidden">
           <table className="w-full text-xs text-left">
             <thead className="bg-neutral-100 text-neutral-700 border-b border-neutral-200">
               <tr>
-                <th className="py-2 px-3 font-semibold">Data / Hora</th>
-                <th className="py-2 px-3 font-semibold">OS</th>
-                <th className="py-2 px-3 font-semibold">Cliente</th>
-                <th className="py-2 px-3 font-semibold">Placa / Modelo</th>
-                <th className="py-2 px-3 font-semibold">Responsável</th>
-                <th className="py-2 px-3 font-semibold text-right">Valor Gerado</th>
+                <th className="py-2.5 px-3 font-semibold w-24">Data / Hora</th>
+                <th className="py-2.5 px-3 font-semibold w-20">Nº OS</th>
+                <th className="py-2.5 px-3 font-semibold">Cliente</th>
+                <th className="py-2.5 px-3 font-semibold">Veículo / Placa</th>
+                <th className="py-2.5 px-3 font-semibold">Condutor</th>
+                <th className="py-2.5 px-3 font-semibold text-center w-24">Assinatura</th>
+                <th className="py-2.5 px-3 font-semibold text-right w-24">Valor</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {launches.slice(0, 5).map((l) => (
-                <tr key={l.id} className="hover:bg-neutral-50">
-                  <td className="py-2 px-3 text-neutral-600 font-mono">
-                    {new Date(l.dataHora).toLocaleDateString('pt-BR')} {new Date(l.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+              {displayedLaunches.map((l) => (
+                <tr key={l.id} className="hover:bg-neutral-50 transition-colors">
+                  <td className="py-2.5 px-3 text-neutral-600 font-mono whitespace-nowrap">
+                    {formatDateTime(l.dataHora)}
                   </td>
-                  <td className="py-2 px-3 font-bold font-mono text-neutral-800">{l.numeroOS}</td>
-                  <td className="py-2 px-3 font-medium text-neutral-900">{l.clienteNome}</td>
-                  <td className="py-2 px-3">
-                    <span className="font-bold font-mono">{l.placa}</span> · {l.modelo}
+                  <td className="py-2.5 px-3 font-bold font-mono text-neutral-900">
+                    {l.numeroOS}
                   </td>
-                  <td className="py-2 px-3 text-neutral-600">{l.responsavel}</td>
-                  <td className="py-2 px-3 text-right font-mono font-bold text-neutral-900">
+                  <td className="py-2.5 px-3 font-medium text-neutral-900">
+                    {l.clienteNome}
+                  </td>
+                  <td className="py-2.5 px-3">
+                    <span className="font-bold font-mono text-neutral-950">{l.placa}</span>
+                    <span className="text-neutral-500 block text-[11px] truncate max-w-[140px]">
+                      {l.modelo}
+                    </span>
+                  </td>
+                  <td className="py-2.5 px-3 text-neutral-700">
+                    <span className="font-medium text-neutral-900 block">{l.nomeCondutor}</span>
+                    {l.matriculaCondutor && l.matriculaCondutor !== 'S/N' && (
+                      <span className="text-[10px] text-neutral-500 font-mono">
+                        Mat: {l.matriculaCondutor}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2.5 px-3 text-center">
+                    {l.assinatura ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Assinado
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-neutral-400">Pendente</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 px-3 text-right font-mono font-bold text-neutral-950">
                     {formatCurrency(l.valorTotal)}
                   </td>
                 </tr>
               ))}
-              {launches.length === 0 && (
+
+              {displayedLaunches.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-4 text-center text-neutral-400">
-                    Nenhum serviço lançado ainda para contabilizar metas.
+                  <td colSpan={7} className="py-8 text-center text-neutral-400">
+                    <Car className="w-7 h-7 mx-auto mb-1 text-neutral-300" />
+                    <p className="text-xs font-semibold text-neutral-600">
+                      Nenhum atendimento registrado no filtro selecionado (
+                      {activeListTab === 'hoje'
+                        ? 'Hoje'
+                        : activeListTab === 'semana'
+                        ? 'Esta Semana'
+                        : activeListTab === 'mes'
+                        ? 'Este Mês'
+                        : 'Todos'}
+                      ).
+                    </p>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">
+                      Ao lançar um serviço com a data deste período, os valores e metas atualizarão automaticamente.
+                    </p>
                   </td>
                 </tr>
               )}

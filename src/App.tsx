@@ -41,6 +41,8 @@ import {
   Building2,
   Plus,
   Home,
+  LayoutDashboard,
+  BarChart3,
   Menu,
   X,
   AlertCircle,
@@ -379,7 +381,7 @@ export default function App() {
   };
 
   const navItems = [
-    { id: 'inicio', label: 'Início', icon: Home },
+    { id: 'inicio', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'lancamentos', label: 'Lançamentos', icon: Car },
     { id: 'clientes', label: 'Clientes & Preços', icon: Users },
     { id: 'servicos', label: 'Serviços', icon: Wrench },
@@ -629,6 +631,8 @@ export default function App() {
             company={data.company}
             goals={data.goals}
             launches={data.launches}
+            clients={data.clients}
+            services={data.services}
             onOpenLancamento={() => {
               setEditingLaunch(null);
               setIsLancamentoModalOpen(true);
@@ -637,6 +641,14 @@ export default function App() {
             onOpenCompanyModal={() => {
               setIsFirstAccess(false);
               setIsCompanyModalOpen(true);
+            }}
+            onSendEmail={(launch) => {
+              const cli = data.clients.find((c) => c.id === launch.clienteId);
+              setEmailModalData({
+                isOpen: true,
+                launch,
+                email: cli?.email || '',
+              });
             }}
           />
         )}
@@ -766,8 +778,8 @@ export default function App() {
             activeTab === 'inicio' ? 'text-neutral-950 font-bold' : 'text-neutral-500'
           }`}
         >
-          <Home className={`w-5 h-5 mb-0.5 ${activeTab === 'inicio' ? 'text-neutral-950' : 'text-neutral-400'}`} />
-          <span>Início</span>
+          <LayoutDashboard className={`w-5 h-5 mb-0.5 ${activeTab === 'inicio' ? 'text-neutral-950' : 'text-neutral-400'}`} />
+          <span>Dashboard</span>
         </button>
 
         <button
