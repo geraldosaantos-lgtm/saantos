@@ -1,8 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Client, ServiceItem, ServiceLaunch, ServiceItemLaunch } from '../types';
 import { SignaturePad } from './SignaturePad';
-import { formatCurrency, formatPlate, getLocalDateString, getLocalTimeString, combineDateTimeToIso } from '../utils/storage';
-import { X, Plus, Trash2, CheckCircle, Car, Calendar, Clock, Mail } from 'lucide-react';
+import {
+  formatCurrency,
+  formatPlate,
+  normalizePlate,
+  findPlateOwner,
+  getLocalDateString,
+  getLocalTimeString,
+  combineDateTimeToIso,
+} from '../utils/storage';
+import { X, Plus, Trash2, CheckCircle, Car, Calendar, Clock, Mail, AlertCircle, ShieldAlert, Check } from 'lucide-react';
 
 export interface LaunchEmailOption {
   sendEmail: boolean;
@@ -15,7 +23,9 @@ interface LancamentoModalProps {
   onClose: () => void;
   clients: Client[];
   services: ServiceItem[];
+  launches?: ServiceLaunch[];
   onSave: (launch: ServiceLaunch, emailOption?: LaunchEmailOption) => void;
+  onSaveClient?: (client: Client) => void;
   existingLaunch?: ServiceLaunch | null;
 }
 
@@ -24,7 +34,9 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   onClose,
   clients,
   services,
+  launches = [],
   onSave,
+  onSaveClient,
   existingLaunch = null,
 }) => {
   const [dataAtendimento, setDataAtendimento] = useState('');
@@ -132,6 +144,7 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
   if (!isOpen) return null;
 
   const currentClient = clients.find((c) => c.id === clienteId);
+  const otherPlateOwner = findPlateOwner(placa, clients, currentClient?.id, launches);
 
   // Função para pegar o preço do serviço respeitando a tabela do cliente
   const getServicePriceForClient = (service: ServiceItem, client?: Client): number => {
@@ -230,6 +243,16 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
       return;
     }
 
+    // REGRA DE EXCLUSIVIDADE: Bloqueia lançamento de veículo pertencente ou lançado em outro cliente
+    if (otherPlateOwner) {
+      const proprietario = otherPlateOwner.client.nomeFantasia || otherPlateOwner.client.razaoSocial || 'Outro Cliente';
+      const motivo = otherPlateOwner.origem === 'lancamento' ? 'já foi lançado no histórico de' : 'já está cadastrado na frota de';
+      setErrorMsg(
+        `BLOQUEADO: A placa ${formatPlate(placa)} ${motivo} "${proprietario}". O sistema não permite lançar o mesmo veículo em clientes diferentes!`
+      );
+      return;
+    }
+
     if (itensServico.length === 0) {
       setErrorMsg('Adicione pelo menos um serviço ao lançamento.');
       return;
@@ -243,6 +266,27 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
     if (enviarEmail && !emailDestino.trim()) {
       setErrorMsg('Por favor, informe o e-mail do cliente ou desmarque a opção de envio por e-mail.');
       return;
+    }
+
+    // REGRA: Ao lançar pela primeira vez um veículo para o cliente, o mesmo fica salvo automaticamente
+    if (currentClient && onSaveClient) {
+      const cleanPlate = normalizePlate(placa);
+      const alreadyHas =
+        Array.isArray(currentClient.veiculos) &&
+        currentClient.veiculos.some((v) => normalizePlate(v.placa) === cleanPlate);
+
+      if (!alreadyHas) {
+        const newVehicle = {
+          placa: formatPlate(placa),
+          modelo: modelo.trim(),
+          cadastradoEm: new Date().toISOString(),
+        };
+        const updatedClient: Client = {
+          ...currentClient,
+          veiculos: [...(currentClient.veiculos || []), newVehicle],
+        };
+        onSaveClient(updatedClient);
+      }
     }
 
     const launch: ServiceLaunch = {
@@ -359,6 +403,41 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
               </div>
             </div>
 
+            {/* Seletor Rápido de Veículo da Frota Salva deste Cliente */}
+            {currentClient?.veiculos && currentClient.veiculos.length > 0 && (
+              <div className="mb-3.5 p-3 bg-blue-50/70 border border-blue-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <span className="text-xs font-semibold text-blue-950 flex items-center gap-1.5">
+                  <Car className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>
+                    Frota de <strong>{currentClient.nomeFantasia}</strong> ({currentClient.veiculos.length} veículos cadastrados):
+                  </span>
+                </span>
+                <select
+                  onChange={(e) => {
+                    const v = currentClient.veiculos?.find((veh) => veh.placa === e.target.value);
+                    if (v) {
+                      setPlaca(v.placa);
+                      setModelo(v.modelo);
+                      setErrorMsg('');
+                    }
+                  }}
+                  value={
+                    currentClient.veiculos.some((v) => normalizePlate(v.placa) === normalizePlate(placa))
+                      ? formatPlate(placa)
+                      : ''
+                  }
+                  className="text-xs bg-white border border-blue-300 rounded-lg px-2.5 py-1.5 text-neutral-800 font-mono font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-2xs"
+                >
+                  <option value="">-- Escolher veículo da frota cadastrada --</option>
+                  {currentClient.veiculos.map((v) => (
+                    <option key={v.placa} value={v.placa}>
+                      {v.placa} · {v.modelo}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
               <div className="md:col-span-2">
                 <label className="block text-xs font-semibold text-neutral-700 mb-1">
@@ -390,8 +469,23 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
                   required
                   placeholder="Ex: ABC-1234 / BRA2E19"
                   value={placa}
-                  onChange={(e) => setPlaca(e.target.value.toUpperCase())}
-                  className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono font-bold tracking-wider"
+                  onChange={(e) => {
+                    setErrorMsg('');
+                    const val = e.target.value.toUpperCase();
+                    setPlaca(val);
+                    // Se a placa já existir na frota deste cliente e o modelo estiver vazio, preenche automaticamente
+                    if (currentClient?.veiculos) {
+                      const found = currentClient.veiculos.find((v) => normalizePlate(v.placa) === normalizePlate(val));
+                      if (found && !modelo) {
+                        setModelo(found.modelo);
+                      }
+                    }
+                  }}
+                  className={`w-full px-3 py-2 text-xs border rounded-md focus:outline-none focus:ring-2 font-mono font-bold tracking-wider ${
+                    otherPlateOwner
+                      ? 'border-red-500 bg-red-50 text-red-950 focus:ring-red-500'
+                      : 'border-neutral-300 focus:ring-neutral-900'
+                  }`}
                 />
               </div>
 
@@ -408,6 +502,38 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
                   className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 font-mono"
                 />
               </div>
+
+              {/* ALERTA DE EXCLUSIVIDADE: Se o veículo pertencer a outro cliente */}
+              {otherPlateOwner && (
+                <div className="col-span-full p-3 bg-red-50 border border-red-300 rounded-xl text-xs text-red-900 flex items-start gap-2.5 animate-in fade-in">
+                  <ShieldAlert className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <p className="font-bold text-red-950 flex items-center gap-1">
+                      VEÍCULO BLOQUEADO: Pertence a outro cliente!
+                    </p>
+                    <p className="text-red-800">
+                      A placa <strong>{formatPlate(placa)}</strong> já {otherPlateOwner.origem === 'lancamento' ? 'foi lançada anteriormente para' : 'pertence exclusivamente ao'} o cliente{' '}
+                      <strong>"{otherPlateOwner.client.nomeFantasia || otherPlateOwner.client.razaoSocial}"</strong> {otherPlateOwner.client.cnpj ? `(${otherPlateOwner.client.cnpj})` : ''}.
+                    </p>
+                    <p className="text-[11px] text-red-700 font-medium">
+                      O sistema não permite lançar atendimentos deste veículo para outra empresa.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* NOTA: Se for a primeira vez que o veículo está sendo lançado para este cliente */}
+              {!otherPlateOwner &&
+                placa.length >= 7 &&
+                currentClient &&
+                !currentClient.veiculos?.some((v) => normalizePlate(v.placa) === normalizePlate(placa)) && (
+                  <div className="col-span-full p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-[11px] text-emerald-900 flex items-center gap-2 animate-in fade-in">
+                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>
+                      <strong>Primeiro lançamento deste veículo:</strong> A placa <strong>{formatPlate(placa)}</strong> será salva automaticamente na frota de <strong>{currentClient.nomeFantasia}</strong> ao concluir a ordem.
+                    </span>
+                  </div>
+                )}
 
               <div className="md:col-span-2">
                 <label className="block text-xs font-semibold text-neutral-700 mb-1">
@@ -727,7 +853,13 @@ export const LancamentoModal: React.FC<LancamentoModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="flex-2 sm:flex-initial px-5 py-2.5 sm:py-2 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                disabled={Boolean(otherPlateOwner)}
+                title={otherPlateOwner ? 'Veículo pertence a outro cliente' : undefined}
+                className={`flex-2 sm:flex-initial px-5 py-2.5 sm:py-2 text-xs font-semibold text-white rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm ${
+                  otherPlateOwner
+                    ? 'bg-neutral-400 cursor-not-allowed opacity-60'
+                    : 'bg-neutral-900 hover:bg-neutral-800'
+                }`}
               >
                 <CheckCircle className="w-4 h-4" />
                 {existingLaunch ? 'Salvar Alterações' : 'Concluir Lançamento'}

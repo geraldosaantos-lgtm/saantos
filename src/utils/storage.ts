@@ -125,6 +125,11 @@ export const defaultClients: Client[] = [
       'srv-5': 160.0,
       'srv-6': 140.0,
     },
+    veiculos: [
+      { placa: 'BRA-2E19', modelo: 'Mercedes-Benz Accelo 1016' },
+      { placa: 'RYS-8A45', modelo: 'Volkswagen Delivery 9.170' },
+      { placa: 'PXK-5040', modelo: 'Volvo FH 540' },
+    ],
     ativo: true,
     criadoEm: '2026-09-01',
   },
@@ -142,6 +147,11 @@ export const defaultClients: Client[] = [
       'srv-3': 88.0,
       'srv-4': 100.0,
     },
+    veiculos: [
+      { placa: 'GAF-3920', modelo: 'Fiat Strada Freedom 1.3' },
+      { placa: 'FGT-9921', modelo: 'Renault Kwid Zen' },
+      { placa: 'BDV-1029', modelo: 'Chevrolet Onix Plus' },
+    ],
     ativo: true,
     criadoEm: '2026-09-05',
   },
@@ -158,6 +168,10 @@ export const defaultClients: Client[] = [
       'srv-2': 72.0,
       'srv-6': 145.0,
     },
+    veiculos: [
+      { placa: 'KMN-4812', modelo: 'Hyundai HR 2.5' },
+      { placa: 'DRX-9014', modelo: 'Iveco Daily 35S14' },
+    ],
     ativo: true,
     criadoEm: '2026-09-10',
   },
@@ -199,7 +213,12 @@ export const loadStoredData = (): AppState => {
       const state: AppState = {
         company: parsed.company || defaultCompanyProfile,
         services: Array.isArray(parsed.services) && parsed.services.length > 0 ? parsed.services : defaultServices,
-        clients: Array.isArray(parsed.clients) ? parsed.clients : defaultClients,
+        clients: Array.isArray(parsed.clients)
+          ? parsed.clients.map((c: any) => ({
+              ...c,
+              veiculos: Array.isArray(c.veiculos) ? c.veiculos : [],
+            }))
+          : defaultClients,
         launches: cleanLaunches,
         goals: parsed.goals || defaultGoals,
       };
@@ -266,13 +285,103 @@ export const formatDateTime = (isoStr: string): string => {
   }
 };
 
+export const normalizePlate = (val: string): string => {
+  return (val || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+};
+
 export const formatPlate = (val: string): string => {
-  const clean = val.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const clean = normalizePlate(val);
   if (clean.length === 7) {
     // Padrão antigo ABC-1234 ou mercosul ABC1D23
     return `${clean.slice(0, 3)}-${clean.slice(3)}`;
   }
   return clean;
+};
+
+export interface PlateConflictInfo {
+  client: Client | { id: string; nomeFantasia: string; razaoSocial?: string; cnpj?: string };
+  vehicle?: { placa: string; modelo: string };
+  origem: 'frota' | 'lancamento';
+}
+
+/**
+ * Localiza se uma determinada placa já pertence a algum cliente cadastrado ou se já foi lançada em outro cliente.
+ * Se currentClientId for fornecido, desconsidera o próprio cliente na checagem.
+ */
+export const findPlateOwner = (
+  plate: string,
+  clients: Client[],
+  currentClientId?: string,
+  launches?: ServiceLaunch[]
+): PlateConflictInfo | null => {
+  const norm = normalizePlate(plate);
+  if (!norm || norm.length < 4) return null;
+
+  // 1. Checa se a placa está cadastrada na frota de outro cliente
+  for (const c of clients) {
+    if (currentClientId && c.id === currentClientId) continue;
+    if (Array.isArray(c.veiculos)) {
+      const v = c.veiculos.find((veh) => normalizePlate(veh.placa) === norm);
+      if (v) {
+        return { client: c, vehicle: v, origem: 'frota' };
+      }
+    }
+  }
+
+  // 2. Checa se a placa já foi lançada anteriormente em outro cliente
+  if (Array.isArray(launches)) {
+    const launchConflict = launches.find(
+      (l) => normalizePlate(l.placa) === norm && l.clienteId && l.clienteId !== currentClientId
+    );
+    if (launchConflict) {
+      const ownerClient = clients.find((c) => c.id === launchConflict.clienteId);
+      return {
+        client: ownerClient || {
+          id: launchConflict.clienteId,
+          nomeFantasia: launchConflict.clienteNome || 'Outro Cliente',
+          cnpj: launchConflict.clienteCnpj || '',
+        },
+        vehicle: {
+          placa: launchConflict.placa,
+          modelo: launchConflict.modelo,
+        },
+        origem: 'lancamento',
+      };
+    }
+  }
+
+  return null;
+};
+
+export interface FlatVehicleItem {
+  placa: string;
+  modelo: string;
+  cadastradoEm?: string;
+  clientId: string;
+  clientNome: string;
+  clientCnpj: string;
+}
+
+/**
+ * Extrai todos os veículos de todos os clientes em uma lista plana para consulta e gestão centralizada.
+ */
+export const getAllRegisteredVehicles = (clients: Client[]): FlatVehicleItem[] => {
+  const list: FlatVehicleItem[] = [];
+  clients.forEach((c) => {
+    if (Array.isArray(c.veiculos)) {
+      c.veiculos.forEach((v) => {
+        list.push({
+          placa: v.placa,
+          modelo: v.modelo,
+          cadastradoEm: v.cadastradoEm,
+          clientId: c.id,
+          clientNome: c.nomeFantasia || c.razaoSocial || 'Cliente',
+          clientCnpj: c.cnpj || '',
+        });
+      });
+    }
+  });
+  return list;
 };
 
 // Retorna YYYY-MM-DD com base no horário local (evita bug de fuso horário UTC em viradas de dia)

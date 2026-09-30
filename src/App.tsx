@@ -7,7 +7,14 @@ import {
   ServiceLaunch,
   GoalsConfig,
 } from './types';
-import { loadStoredData, saveStoredData, AppState } from './utils/storage';
+import {
+  loadStoredData,
+  saveStoredData,
+  AppState,
+  normalizePlate,
+  formatPlate,
+  findPlateOwner,
+} from './utils/storage';
 import { getSupabaseConfig, getSupabaseClient } from './lib/supabase';
 import {
   fetchStateFromSupabase,
@@ -260,6 +267,19 @@ export default function App() {
     launch: ServiceLaunch,
     emailOption?: LaunchEmailOption
   ) => {
+    // 1. Verificação de segurança: Checa se a placa pertence ou foi lançada em outro cliente
+    const plateConflict = findPlateOwner(launch.placa, data.clients, launch.clienteId, data.launches);
+    if (plateConflict) {
+      const proprietario = plateConflict.client.nomeFantasia || plateConflict.client.razaoSocial || 'Outro Cliente';
+      const motivo = plateConflict.origem === 'lancamento' ? 'já foi lançada anteriormente no cliente' : 'já está cadastrada no cliente';
+      alert(
+        `BLOQUEADO: A placa ${formatPlate(launch.placa)} ${motivo} "${proprietario}". O sistema não permite lançar o mesmo veículo em clientes diferentes.`
+      );
+      return;
+    }
+
+    let updatedClientToSync: Client | null = null;
+
     updateData((prev) => {
       const index = prev.launches.findIndex((l) => l.id === launch.id);
       let updatedLaunches = [...prev.launches];
@@ -268,12 +288,45 @@ export default function App() {
       } else {
         updatedLaunches = [launch, ...updatedLaunches];
       }
+
+      // REGRA: Ao lançar pela primeira vez um veículo para o cliente, o mesmo fica salvo automaticamente
+      let updatedClients = [...prev.clients];
+      if (launch.clienteId && launch.placa) {
+        const cleanPlate = normalizePlate(launch.placa);
+        const cliIndex = updatedClients.findIndex((c) => c.id === launch.clienteId);
+        if (cliIndex >= 0) {
+          const cli = updatedClients[cliIndex];
+          const alreadyHas =
+            Array.isArray(cli.veiculos) &&
+            cli.veiculos.some((v) => normalizePlate(v.placa) === cleanPlate);
+
+          if (!alreadyHas) {
+            const newVehicle = {
+              placa: formatPlate(launch.placa),
+              modelo: launch.modelo.trim(),
+              cadastradoEm: new Date().toISOString(),
+            };
+            const updatedCli: Client = {
+              ...cli,
+              veiculos: [...(cli.veiculos || []), newVehicle],
+            };
+            updatedClients[cliIndex] = updatedCli;
+            updatedClientToSync = updatedCli;
+          }
+        }
+      }
+
       return {
         ...prev,
         launches: updatedLaunches,
+        clients: updatedClients,
       };
     });
+
     syncLaunchToSupabase(launch);
+    if (updatedClientToSync) {
+      syncClientToSupabase(updatedClientToSync);
+    }
     setEditingLaunch(null);
 
     // Se o usuário optou por salvar o e-mail no cadastro do cliente
@@ -678,6 +731,7 @@ export default function App() {
           <ClientesView
             clients={data.clients}
             services={data.services}
+            launches={data.launches}
             onSaveClient={handleSaveClient}
             onDeleteClient={handleDeleteClient}
           />
@@ -721,7 +775,9 @@ export default function App() {
         }}
         clients={data.clients}
         services={data.services}
+        launches={data.launches}
         onSave={handleSaveLaunch}
+        onSaveClient={handleSaveClient}
         existingLaunch={editingLaunch}
       />
 

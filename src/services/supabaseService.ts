@@ -83,6 +83,7 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
         telefone: c.telefone,
         endereco: c.endereco || '',
         tabelaPrecos: c.tabela_precos || {},
+        veiculos: Array.isArray(c.veiculos) ? c.veiculos : [],
         ativo: c.ativo !== false,
         criadoEm: c.criado_em,
       }));
@@ -217,6 +218,7 @@ export async function syncClientToSupabase(client: Client): Promise<boolean> {
         telefone: client.telefone,
         endereco: client.endereco,
         tabela_precos: client.tabelaPrecos,
+        veiculos: client.veiculos || [],
         ativo: client.ativo,
         criado_em: client.criadoEm,
         updated_at: new Date().toISOString(),

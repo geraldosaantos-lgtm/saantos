@@ -29,6 +29,12 @@ export interface ServiceItem {
   ativo: boolean;
 }
 
+export interface ClientVehicle {
+  placa: string;
+  modelo: string;
+  cadastradoEm?: string;
+}
+
 export interface Client {
   id: string;
   cnpj: string;
@@ -39,6 +45,8 @@ export interface Client {
   endereco?: string;
   // Preços personalizados de cada serviço para este cliente específico
   tabelaPrecos: Record<string, number>;
+  // Veículos vinculados a este cliente
+  veiculos?: ClientVehicle[];
   ativo: boolean;
   criadoEm: string;
 }
