@@ -54,11 +54,9 @@ import {
   Menu,
   X,
   AlertCircle,
-  Database,
   MoreHorizontal,
   RefreshCw,
-  Check,
-  Github
+  Check
 } from 'lucide-react';
 
 export default function App() {
@@ -590,38 +588,7 @@ export default function App() {
               title="Sincronizar dados entre Celular e Computador via Supabase"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-neutral-900' : 'text-neutral-500'}`} />
-              <span className="hidden lg:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setInfraInitialTab('supabase');
-                setIsInfraModalOpen(true);
-              }}
-              className={`hidden sm:flex px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-lg transition-colors items-center gap-1.5 whitespace-nowrap border ${
-                isSupabaseOnline
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
-                  : 'bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-50'
-              }`}
-              title="Configuração de Infraestrutura (GitHub, Vercel, Supabase)"
-            >
-              <Database className={`w-3.5 h-3.5 ${isSupabaseOnline ? 'text-emerald-600' : 'text-neutral-500'}`} />
-              <span>
-                {isSupabaseOnline ? 'Nuvem Conectada' : 'Infra / Supabase'}
-              </span>
-            </button>
-
-            {/* Botão GitHub Dedicado */}
-            <button
-              onClick={() => {
-                setInfraInitialTab('github');
-                setIsInfraModalOpen(true);
-              }}
-              className="hidden sm:flex px-2.5 sm:px-3 py-2 text-xs font-semibold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 rounded-lg transition-colors items-center gap-1.5 whitespace-nowrap shadow-2xs"
-              title="Salvar alterações no GitHub / Baixar código atualizado"
-            >
-              <Github className="w-3.5 h-3.5 text-neutral-900" />
-              <span>GitHub</span>
+              <span className="hidden sm:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
             </button>
 
             <button
@@ -716,30 +683,6 @@ export default function App() {
               >
                 <Building2 className="w-4 h-4 text-neutral-500" />
                 Dados da Minha Empresa (CNPJ / PIX)
-              </button>
-
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  setInfraInitialTab('supabase');
-                  setIsInfraModalOpen(true);
-                }}
-                className="w-full px-3 py-2.5 text-xs font-medium rounded-lg flex items-center gap-2.5 text-neutral-700 hover:bg-neutral-50"
-              >
-                <Database className={`w-4 h-4 ${isSupabaseOnline ? 'text-emerald-600' : 'text-neutral-500'}`} />
-                {isSupabaseOnline ? 'Nuvem Conectada (Supabase)' : 'Configurar Supabase'}
-              </button>
-
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  setInfraInitialTab('github');
-                  setIsInfraModalOpen(true);
-                }}
-                className="w-full px-3 py-2.5 text-xs font-semibold rounded-lg flex items-center gap-2.5 text-neutral-900 bg-neutral-100 hover:bg-neutral-200"
-              >
-                <Github className="w-4 h-4 text-neutral-900" />
-                <span>Salvar Alterações no GitHub</span>
               </button>
             </div>
           </div>
