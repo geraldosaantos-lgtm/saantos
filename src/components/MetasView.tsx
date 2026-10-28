@@ -6,6 +6,7 @@ import {
   calculateLaunchMetrics,
   getWeekRange,
 } from '../utils/storage';
+import { GoalsAnalyticsChart } from './GoalsAnalyticsChart';
 import {
   Target,
   TrendingUp,
@@ -394,6 +395,14 @@ export const MetasView: React.FC<MetasViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Gráfico Analítico de Atingimento de Metas e Médias Diárias/Semanais */}
+      <GoalsAnalyticsChart
+        launches={launches}
+        goals={goals}
+        defaultViewMode="semanas"
+        title="Desempenho Histórico de Metas & Médias"
+      />
 
       {/* Seção de Transparência: Lançamentos que Compõem as Metas */}
       <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4">

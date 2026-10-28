@@ -6,6 +6,7 @@ import {
   calculateLaunchMetrics,
   getWeekRange,
 } from '../utils/storage';
+import { GoalsAnalyticsChart } from './GoalsAnalyticsChart';
 import {
   Car,
   Users,
@@ -289,77 +290,13 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
         </div>
       </div>
 
-      {/* 3. GRÁFICO INTERATIVO DE FATURAMENTO DOS ÚLTIMOS 7 DIAS */}
-      <div className="bg-white border border-neutral-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-bold text-neutral-900 uppercase tracking-wider flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-neutral-700" />
-              Movimentação e Faturamento dos Últimos 7 Dias
-            </h2>
-            <p className="text-xs text-neutral-500">
-              Acompanhe a curva de evolução diária de atendimentos e receita gerada no pátio.
-            </p>
-          </div>
-          <div className="flex items-center gap-3 text-xs">
-            <span className="flex items-center gap-1.5 text-neutral-600 font-medium">
-              <span className="w-3 h-3 bg-neutral-900 rounded-xs inline-block" /> Dias Anteriores
-            </span>
-            <span className="flex items-center gap-1.5 text-blue-700 font-bold">
-              <span className="w-3 h-3 bg-blue-600 rounded-xs inline-block" /> Hoje
-            </span>
-          </div>
-        </div>
-
-        {/* Barras do Gráfico */}
-        <div className="grid grid-cols-7 gap-2 sm:gap-4 pt-6 pb-2 items-end min-h-[180px]">
-          {metrics.last7Days.map((d) => {
-            const heightPercent = maxDayValue > 0 ? Math.max(10, Math.round((d.total / maxDayValue) * 100)) : 10;
-            return (
-              <div key={d.dateStr} className="flex flex-col items-center gap-2 group">
-                {/* Tooltip com Valor no Topo da Barra */}
-                <div className="text-[10px] sm:text-xs font-mono font-bold text-neutral-900 text-center truncate max-w-full">
-                  {d.total > 0 ? formatCurrency(d.total) : 'R$ 0'}
-                </div>
-
-                {/* Coluna da Barra */}
-                <div className="w-full bg-neutral-100 rounded-xl h-36 flex items-end p-1">
-                  <div
-                    className={`w-full rounded-lg transition-all duration-500 relative ${
-                      d.isToday
-                        ? 'bg-blue-600 group-hover:bg-blue-500 shadow-sm'
-                        : d.total > 0
-                        ? 'bg-neutral-900 group-hover:bg-neutral-800'
-                        : 'bg-neutral-200'
-                    }`}
-                    style={{ height: `${heightPercent}%` }}
-                  >
-                    {d.count > 0 && (
-                      <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-[9px] font-mono text-neutral-500 group-hover:text-neutral-900 whitespace-nowrap">
-                        {d.count}v
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Legenda do Dia */}
-                <div className="text-center">
-                  <span
-                    className={`text-[11px] sm:text-xs font-bold block ${
-                      d.isToday ? 'text-blue-600' : 'text-neutral-700'
-                    }`}
-                  >
-                    {d.isToday ? 'Hoje' : d.dayLabel}
-                  </span>
-                  <span className="text-[10px] text-neutral-400 font-mono block">
-                    {d.shortDate}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* 3. GRÁFICO INTERATIVO DE ATINGIMENTO DE METAS E MÉDIAS */}
+      <GoalsAnalyticsChart
+        launches={launches}
+        goals={goals}
+        defaultViewMode="dias"
+        title="Desempenho de Metas & Médias"
+      />
 
       {/* 4. VISÃO CONSOLIDADA DE METAS: DIA, SEMANA E MÊS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
