@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { CompanyProfile, Client, ServiceLaunch } from '../types';
-import { formatCurrency, formatDateTime, getLocalDateString, normalizeServiceCategory } from '../utils/storage';
+import { formatCurrency, formatDateTime, getLocalDateString, normalizeServiceCategory, parseLaunchDate } from '../utils/storage';
 import { exportReportToExcel } from '../utils/exportExcel';
 import { exportReportToPdf } from '../utils/exportPdf';
 import {
@@ -76,7 +76,8 @@ export const RelatoriosView: React.FC<RelatoriosViewProps> = ({
     }
 
     const filtered = launches.filter((l) => {
-      const lDate = new Date(l.dataHora);
+      const lDate = parseLaunchDate(l.dataHora);
+      if (!lDate) return false;
       const matchesPeriod = lDate >= startDate && lDate <= endDate;
       const matchesClient =
         selectedClientId === 'todos' || l.clienteId === selectedClientId;

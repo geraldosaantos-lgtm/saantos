@@ -500,8 +500,12 @@ export const formatCurrency = (val: number): string => {
 export const formatDate = (isoStr: string): string => {
   if (!isoStr) return '-';
   try {
-    const date = new Date(isoStr);
-    return date.toLocaleDateString('pt-BR');
+    const d = parseLaunchDate(isoStr);
+    if (!d) return isoStr;
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
   } catch {
     return isoStr;
   }
@@ -510,14 +514,14 @@ export const formatDate = (isoStr: string): string => {
 export const formatDateTime = (isoStr: string): string => {
   if (!isoStr) return '-';
   try {
-    const date = new Date(isoStr);
-    return date.toLocaleDateString('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    const d = parseLaunchDate(isoStr);
+    if (!d) return isoStr;
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hour = String(d.getHours()).padStart(2, '0');
+    const minute = String(d.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hour}:${minute}`;
   } catch {
     return isoStr;
   }
@@ -629,8 +633,8 @@ export const getAllRegisteredVehicles = (clients: Client[]): FlatVehicleItem[] =
 
 // Retorna YYYY-MM-DD com base no horário local (evita bug de fuso horário UTC em viradas de dia)
 export const getLocalDateString = (d: Date | string = new Date()): string => {
-  const dateObj = typeof d === 'string' ? new Date(d) : d;
-  if (isNaN(dateObj.getTime())) return '';
+  const dateObj = typeof d === 'string' ? parseLaunchDate(d) || new Date(d) : d;
+  if (!dateObj || isNaN(dateObj.getTime())) return '';
   const year = dateObj.getFullYear();
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
   const day = String(dateObj.getDate()).padStart(2, '0');
@@ -639,33 +643,37 @@ export const getLocalDateString = (d: Date | string = new Date()): string => {
 
 // Retorna HH:mm com base no horário local (ex: "14:30")
 export const getLocalTimeString = (d: Date | string = new Date()): string => {
-  const dateObj = typeof d === 'string' ? new Date(d) : d;
-  if (isNaN(dateObj.getTime())) return '';
+  const dateObj = typeof d === 'string' ? parseLaunchDate(d) || new Date(d) : d;
+  if (!dateObj || isNaN(dateObj.getTime())) return '';
   const hours = String(dateObj.getHours()).padStart(2, '0');
   const minutes = String(dateObj.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
 };
 
-// Combina data (YYYY-MM-DD) e hora (HH:mm) locais em formato ISO preservando a hora exata
+// Combina data (YYYY-MM-DD) e hora (HH:mm) locais preservando estritamente a data civil informada
 export const combineDateTimeToIso = (dateStr: string, timeStr: string): string => {
-  if (!dateStr) return new Date().toISOString();
-  const time = timeStr && timeStr.trim() ? timeStr.trim() : '00:00';
-  const parts = dateStr.split('-');
+  if (!dateStr || !dateStr.trim()) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    const h = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+    const sec = String(now.getSeconds()).padStart(2, '0');
+    return `${y}-${m}-${d}T${h}:${min}:${sec}`;
+  }
+  const cleanDate = dateStr.trim();
+  const time = timeStr && timeStr.trim() ? timeStr.trim() : '12:00';
   const timeParts = time.split(':');
-  const year = parseInt(parts[0], 10);
-  const month = parseInt(parts[1], 10) - 1;
-  const day = parseInt(parts[2], 10);
-  const hour = parseInt(timeParts[0] || '0', 10);
-  const minute = parseInt(timeParts[1] || '0', 10);
-  const now = new Date();
-  const second = now.getSeconds();
-  const dateObj = new Date(year, month, day, hour, minute, second);
-  return dateObj.toISOString();
+  const h = String(parseInt(timeParts[0] || '12', 10)).padStart(2, '0');
+  const min = String(parseInt(timeParts[1] || '0', 10)).padStart(2, '0');
+  // Salva no formato local 'YYYY-MM-DDTHH:mm:00' sem conversão UTC que possa deslocar o dia civil
+  return `${cleanDate}T${h}:${min}:00`;
 };
 
 /**
  * Converte qualquer formato de data de lançamento (ISO, YYYY-MM-DD, DD/MM/YYYY)
- * em um objeto Date seguro no fuso local, evitando que vire o dia por UTC
+ * em um objeto Date seguro no fuso local, garantindo que o dia civil corresponda exatamente à data do serviço.
  */
 export const parseLaunchDate = (val: string | Date | undefined | null): Date | null => {
   if (!val) return null;
@@ -673,7 +681,16 @@ export const parseLaunchDate = (val: string | Date | undefined | null): Date | n
   const str = String(val).trim();
   if (!str) return null;
 
-  // Formato ISO ou YYYY-MM-DD (ex: 2026-09-30 ou 2026-09-30T10:00:00...)
+  // Se a string possui sufixo UTC 'Z' ou offset (+/-HH:mm), significa que foi salva como UTC absoluto.
+  // Nesse caso, new Date(str) converte para a data e hora LOCAL real em que o usuário a registrou.
+  if (str.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(str)) {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      return d;
+    }
+  }
+
+  // Formato ISO local (YYYY-MM-DDTHH:mm:ss ou YYYY-MM-DD)
   const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/);
   if (isoMatch) {
     const year = parseInt(isoMatch[1], 10);
@@ -685,7 +702,7 @@ export const parseLaunchDate = (val: string | Date | undefined | null): Date | n
     return new Date(year, month, day, hour, minute, second);
   }
 
-  // Formato Brasileiro DD/MM/YYYY (ex: 30/09/2026)
+  // Formato Brasileiro DD/MM/YYYY
   const brMatch = str.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
   if (brMatch) {
     const day = parseInt(brMatch[1], 10);

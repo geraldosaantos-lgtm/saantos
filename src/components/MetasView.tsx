@@ -5,6 +5,8 @@ import {
   formatDateTime,
   calculateLaunchMetrics,
   getWeekRange,
+  parseLaunchDate,
+  isSameMonth,
 } from '../utils/storage';
 import { GoalsAnalyticsChart } from './GoalsAnalyticsChart';
 import {
@@ -69,8 +71,8 @@ export const MetasView: React.FC<MetasViewProps> = ({
         return metrics.weekLaunches;
       case 'mes':
         return launches.filter((l) => {
-          const d = new Date(l.dataHora);
-          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+          const lDate = parseLaunchDate(l.dataHora);
+          return lDate && isSameMonth(lDate, now);
         });
       case 'todos':
       default:
@@ -92,7 +94,7 @@ export const MetasView: React.FC<MetasViewProps> = ({
             </h1>
           </div>
           <p className="text-xs text-neutral-500 mt-1">
-            Valores atualizados em tempo real para o dia de hoje, a semana atual e o mês.
+            Valores apurados pela <strong>data de execução do serviço</strong> para o dia de hoje, semana atual e mês.
           </p>
         </div>
         <button
@@ -102,6 +104,19 @@ export const MetasView: React.FC<MetasViewProps> = ({
           <Edit3 className="w-3.5 h-3.5" />
           {isEditing ? 'Fechar Edição' : 'Ajustar Metas (Valores/Qtd)'}
         </button>
+      </div>
+
+      {/* Card Informativo de Auditoria de Data */}
+      <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3 sm:p-3.5 flex items-start gap-2.5 text-xs text-blue-900 shadow-2xs">
+        <Clock className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+        <div className="space-y-0.5">
+          <span className="font-bold block text-blue-950">
+            Regra de Contabilização das Metas:
+          </span>
+          <p className="text-neutral-700 leading-relaxed text-[11px] sm:text-xs">
+            Cada veículo e valor é contabilizado <strong>exatamente no dia em que foi lavado</strong> (data do atendimento indicada no formulário). Lançamentos inseridos hoje com datas retroativas entram no histórico do dia correto e na respectiva semana/mês, mantendo a meta de hoje 100% precisa.
+          </p>
+        </div>
       </div>
 
       {/* Formulário de Edição de Metas */}
