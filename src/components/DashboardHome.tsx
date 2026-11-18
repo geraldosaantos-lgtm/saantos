@@ -85,7 +85,8 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
 
   const weekRangeLabel = `${formatShortDate(weekStart)} a ${formatShortDate(weekEnd)}`;
 
-  // Valores dinâmicos baseados no período selecionado
+  // Valores dinâmicos baseados no período selecionado (já considerando feriados e recessos)
+  const eg = metrics.effectiveGoals;
   const periodData = (() => {
     switch (selectedPeriod) {
       case 'hoje':
@@ -93,10 +94,10 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           title: 'Hoje',
           dateSubtitle: now.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' }),
           revenue: metrics.totalHoje,
-          targetRevenue: goals.metaDiaria,
+          targetRevenue: eg.metaDiaria,
           pctRevenue: metrics.pctDia,
           count: metrics.qtdHoje,
-          targetCount: goals.metaDiariaQtd,
+          targetCount: Math.round(eg.metaDiariaQtd),
           ticketMedio: metrics.ticketMedioHoje,
         };
       case 'semana':
@@ -104,10 +105,10 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           title: 'Esta Semana',
           dateSubtitle: weekRangeLabel,
           revenue: metrics.totalSemana,
-          targetRevenue: goals.metaSemanal,
+          targetRevenue: eg.metaSemanal,
           pctRevenue: metrics.pctSemana,
           count: metrics.qtdSemana,
-          targetCount: goals.metaSemanalQtd,
+          targetCount: Math.round(eg.metaSemanalQtd),
           ticketMedio: metrics.ticketMedioSemana,
         };
       case 'mes':
@@ -115,10 +116,10 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           title: 'Este Mês',
           dateSubtitle: now.toLocaleString('pt-BR', { month: 'long', year: 'numeric' }),
           revenue: metrics.totalMes,
-          targetRevenue: goals.metaMensal,
+          targetRevenue: eg.metaMensal,
           pctRevenue: metrics.pctMes,
           count: metrics.qtdMes,
-          targetCount: goals.metaMensalQtd,
+          targetCount: Math.round(eg.metaMensalQtd),
           ticketMedio: metrics.ticketMedioMes,
         };
       case 'todos':
@@ -127,10 +128,10 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           title: 'Geral Acumulado',
           dateSubtitle: `${launches.length} ordens de serviço no histórico`,
           revenue: metrics.totalGeral,
-          targetRevenue: goals.metaMensal,
-          pctRevenue: goals.metaMensal > 0 ? Math.round((metrics.totalGeral / goals.metaMensal) * 100) : 0,
+          targetRevenue: eg.metaMensal,
+          pctRevenue: eg.metaMensal > 0 ? Math.round((metrics.totalGeral / eg.metaMensal) * 100) : 0,
           count: metrics.qtdGeral,
-          targetCount: goals.metaMensalQtd,
+          targetCount: Math.round(eg.metaMensalQtd),
           ticketMedio: metrics.qtdGeral > 0 ? metrics.totalGeral / metrics.qtdGeral : 0,
         };
     }
@@ -373,7 +374,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
               Meta de Hoje
             </span>
             <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
-              {metrics.pctDia}%
+              {!eg.todaySchedule.isWorkingDay ? 'Folga/Recesso' : `${metrics.pctDia}%`}
             </span>
           </div>
           <div className="flex items-baseline justify-between">
@@ -381,7 +382,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
               {formatCurrency(metrics.totalHoje)}
             </span>
             <span className="text-xs text-neutral-500">
-              Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaDiaria)}</strong>
+              Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(eg.metaDiaria)}</strong>
             </span>
           </div>
           <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
@@ -394,7 +395,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           </div>
           <div className="flex justify-between text-[11px] text-neutral-500 font-mono">
             <span>{metrics.qtdHoje} veículos hoje</span>
-            <span>Meta: {goals.metaDiariaQtd} vcs</span>
+            <span>Meta: {Math.round(eg.metaDiariaQtd)} vcs</span>
           </div>
         </div>
 
@@ -414,7 +415,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
               {formatCurrency(metrics.totalSemana)}
             </span>
             <span className="text-xs text-neutral-500">
-              Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaSemanal)}</strong>
+              Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(eg.metaSemanal)}</strong>
             </span>
           </div>
           <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
@@ -427,7 +428,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           </div>
           <div className="flex justify-between text-[11px] text-neutral-500 font-mono">
             <span>{metrics.qtdSemana} veículos na semana</span>
-            <span>Meta: {goals.metaSemanalQtd} vcs</span>
+            <span>Meta: {Math.round(eg.metaSemanalQtd)} vcs ({eg.weekWorkingDays}d úteis)</span>
           </div>
         </div>
 
@@ -447,7 +448,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
               {formatCurrency(metrics.totalMes)}
             </span>
             <span className="text-xs text-neutral-500">
-              Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaMensal)}</strong>
+              Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(eg.metaMensal)}</strong>
             </span>
           </div>
           <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden">
@@ -460,7 +461,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           </div>
           <div className="flex justify-between text-[11px] text-neutral-500 font-mono">
             <span>{metrics.qtdMes} veículos no mês</span>
-            <span>Meta: {goals.metaMensalQtd} vcs</span>
+            <span>Meta: {Math.round(eg.metaMensalQtd)} vcs ({eg.monthWorkingDays}d úteis)</span>
           </div>
         </div>
       </div>

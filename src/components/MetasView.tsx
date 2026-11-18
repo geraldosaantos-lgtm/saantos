@@ -9,6 +9,7 @@ import {
   isSameMonth,
 } from '../utils/storage';
 import { GoalsAnalyticsChart } from './GoalsAnalyticsChart';
+import { GoalsCalendarSection } from './GoalsCalendarSection';
 import {
   Target,
   TrendingUp,
@@ -58,7 +59,10 @@ export const MetasView: React.FC<MetasViewProps> = ({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveGoals(formGoals);
+    onSaveGoals({
+      ...formGoals,
+      calendarConfig: goals.calendarConfig,
+    });
     setIsEditing(false);
   };
 
@@ -264,23 +268,31 @@ export const MetasView: React.FC<MetasViewProps> = ({
         </form>
       )}
 
-      {/* Cards de Acompanhamento do Progresso em Tempo Real */}
+      {/* Cards de Acompanhamento do Progresso em Tempo Real (com Recálculo de Feriados/Recessos) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {/* Meta Diária Card */}
         <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4 hover:border-neutral-300 transition-all">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-bold text-neutral-700 uppercase tracking-wider flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5 text-blue-600" />
               Meta do Dia
             </span>
             <span
               className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
-                metrics.pctDia >= 100
+                !metrics.effectiveGoals.todaySchedule.isWorkingDay
+                  ? 'bg-purple-100 text-purple-800'
+                  : metrics.pctDia >= 100
                   ? 'bg-emerald-100 text-emerald-800'
                   : 'bg-blue-50 text-blue-700'
               }`}
             >
-              {metrics.pctDia}% atingido
+              {!metrics.effectiveGoals.todaySchedule.isWorkingDay
+                ? metrics.effectiveGoals.todaySchedule.status === 'recesso'
+                  ? 'Recesso'
+                  : metrics.effectiveGoals.todaySchedule.status === 'feriado_folga'
+                  ? 'Feriado (Folga)'
+                  : 'Folga Semanal'
+                : `${metrics.pctDia}% atingido`}
             </span>
           </div>
 
@@ -288,9 +300,22 @@ export const MetasView: React.FC<MetasViewProps> = ({
             <div className="text-3xl font-extrabold font-mono text-neutral-950">
               {formatCurrency(metrics.totalHoje)}
             </div>
-            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between">
-              <span>Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaDiaria)}</strong></span>
-              <span className="text-[11px] text-neutral-400">Hoje: {now.toLocaleDateString('pt-BR')}</span>
+            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between gap-2">
+              <span>
+                Alvo hoje:{' '}
+                <strong className="font-mono text-neutral-800">
+                  {formatCurrency(metrics.effectiveGoals.metaDiaria)}
+                </strong>
+                {metrics.effectiveGoals.calendarApplied &&
+                  Math.abs(metrics.effectiveGoals.metaDiaria - goals.metaDiaria) >= 1 && (
+                    <span className="text-[10px] text-blue-700 ml-1">
+                      (Base: {formatCurrency(goals.metaDiaria)})
+                    </span>
+                  )}
+              </span>
+              <span className="text-[11px] text-neutral-400 shrink-0">
+                {now.toLocaleDateString('pt-BR')}
+              </span>
             </div>
           </div>
 
@@ -309,36 +334,56 @@ export const MetasView: React.FC<MetasViewProps> = ({
                 <Car className="w-3 h-3 text-neutral-500" />
                 {metrics.qtdHoje} atendimentos hoje
               </span>
-              <span className="text-neutral-500">Meta: {goals.metaDiariaQtd} veículos</span>
+              <span className="text-neutral-500">
+                Meta: {Math.round(metrics.effectiveGoals.metaDiariaQtd)} veículos
+              </span>
             </div>
           </div>
         </div>
 
         {/* Meta Semanal Card */}
         <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4 hover:border-neutral-300 transition-all">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-bold text-neutral-700 uppercase tracking-wider flex items-center gap-1.5">
               <TrendingUp className="w-3.5 h-3.5 text-purple-600" />
               Meta da Semana
             </span>
-            <span
-              className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
-                metrics.pctSemana >= 100
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-purple-50 text-purple-700'
-              }`}
-            >
-              {metrics.pctSemana}% atingido
-            </span>
+            <div className="flex items-center gap-1">
+              {metrics.effectiveGoals.calendarApplied &&
+                metrics.effectiveGoals.weekHasHolidayOrRecess && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800">
+                    Recalculada
+                  </span>
+                )}
+              <span
+                className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
+                  metrics.pctSemana >= 100
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-purple-50 text-purple-700'
+                }`}
+              >
+                {metrics.pctSemana}% atingido
+              </span>
+            </div>
           </div>
 
           <div>
             <div className="text-3xl font-extrabold font-mono text-neutral-950">
               {formatCurrency(metrics.totalSemana)}
             </div>
-            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between">
-              <span>Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaSemanal)}</strong></span>
-              <span className="text-[11px] text-neutral-400 font-mono">{weekRangeLabel}</span>
+            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between gap-2">
+              <span>
+                Alvo:{' '}
+                <strong className="font-mono text-neutral-800">
+                  {formatCurrency(metrics.effectiveGoals.metaSemanal)}
+                </strong>
+                {metrics.effectiveGoals.calendarApplied && (
+                  <span className="text-[10px] text-purple-700 ml-1">
+                    ({metrics.effectiveGoals.weekWorkingDays}d úteis)
+                  </span>
+                )}
+              </span>
+              <span className="text-[11px] text-neutral-400 font-mono shrink-0">{weekRangeLabel}</span>
             </div>
           </div>
 
@@ -357,14 +402,16 @@ export const MetasView: React.FC<MetasViewProps> = ({
                 <Car className="w-3 h-3 text-neutral-500" />
                 {metrics.qtdSemana} atendimentos na semana
               </span>
-              <span className="text-neutral-500">Meta: {goals.metaSemanalQtd} veículos</span>
+              <span className="text-neutral-500">
+                Meta: {Math.round(metrics.effectiveGoals.metaSemanalQtd)} veículos
+              </span>
             </div>
           </div>
         </div>
 
         {/* Meta Mensal Card */}
         <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-4 hover:border-neutral-300 transition-all">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-bold text-neutral-700 uppercase tracking-wider flex items-center gap-1.5">
               <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
               Meta do Mês
@@ -384,9 +431,19 @@ export const MetasView: React.FC<MetasViewProps> = ({
             <div className="text-3xl font-extrabold font-mono text-neutral-950">
               {formatCurrency(metrics.totalMes)}
             </div>
-            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between">
-              <span>Alvo: <strong className="font-mono text-neutral-800">{formatCurrency(goals.metaMensal)}</strong></span>
-              <span className="text-[11px] text-neutral-400 capitalize">{monthName}</span>
+            <div className="text-xs text-neutral-500 mt-1 flex items-center justify-between gap-2">
+              <span>
+                Alvo:{' '}
+                <strong className="font-mono text-neutral-800">
+                  {formatCurrency(metrics.effectiveGoals.metaMensal)}
+                </strong>
+                {metrics.effectiveGoals.calendarApplied && (
+                  <span className="text-[10px] text-emerald-700 ml-1">
+                    ({metrics.effectiveGoals.monthWorkingDays}d úteis)
+                  </span>
+                )}
+              </span>
+              <span className="text-[11px] text-neutral-400 capitalize shrink-0">{monthName}</span>
             </div>
           </div>
 
@@ -405,13 +462,18 @@ export const MetasView: React.FC<MetasViewProps> = ({
                 <Car className="w-3 h-3 text-neutral-500" />
                 {metrics.qtdMes} atendimentos no mês
               </span>
-              <span className="text-neutral-500">Meta: {goals.metaMensalQtd} veículos</span>
+              <span className="text-neutral-500">
+                Meta: {Math.round(metrics.effectiveGoals.metaMensalQtd)} veículos
+              </span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Gráfico Analítico de Atingimento de Metas e Médias Diárias/Semanais */}
+      {/* Calendário Interativo de Feriados (Nac/Est/Mun), Recessos & Recálculo de Metas */}
+      <GoalsCalendarSection goals={goals} onSaveGoals={onSaveGoals} />
+
+      {/* Gráfico Analítico de Acompanhamento de Metas e Médias Diárias/Semanais */}
       <GoalsAnalyticsChart
         launches={launches}
         goals={goals}

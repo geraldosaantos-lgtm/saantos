@@ -1,5 +1,11 @@
-import { ServiceLaunch, GoalsConfig } from '../types';
-import { parseLaunchDate, getLaunchValue, formatCurrency } from './storage';
+import { ServiceLaunch, GoalsConfig, CalendarHolidayItem } from '../types';
+import { parseLaunchDate, getLaunchValue } from './storage';
+import {
+  getEffectiveDayTarget,
+  getEffectiveWeekTarget,
+  getEffectiveMonthTarget,
+  DayScheduleStatus,
+} from './holidaysCalendar';
 
 export type MetricType = 'valor' | 'quantidade';
 export type ChartViewMode = 'dias' | 'semanas' | 'meses' | 'medias';
@@ -17,6 +23,9 @@ export interface DailyGoalItem {
   pct: number;
   difference: number;
   isToday: boolean;
+  scheduleStatus: DayScheduleStatus;
+  holidayName?: string;
+  isWorkingDay: boolean;
 }
 
 export interface WeeklyGoalItem {
@@ -35,6 +44,8 @@ export interface WeeklyGoalItem {
   pct: number;
   difference: number;
   isCurrentWeek: boolean;
+  hasHolidayOrRecess: boolean;
+  workingDaysCount: number;
 }
 
 export interface MonthlyGoalItem {
@@ -222,20 +233,28 @@ export function computeGoalsAnalytics(
     }
   });
 
+  const holidaysCache = new Map<number, CalendarHolidayItem[]>();
+
   // Constrói DailyGoalItem[]
   let daysAchieved = 0;
   let evaluatedDays = 0;
   const dailyItems: DailyGoalItem[] = Array.from(dailyMap.entries()).map(([key, item]) => {
-    const targetVal = goals.metaDiaria || 0;
-    const targetQtd = goals.metaDiariaQtd || 0;
-    // Considera atingida se bateu meta de valor (ou meta de veículos se valor for 0)
-    const isAchieved = targetVal > 0 ? item.actualValue >= targetVal : item.actualCount >= targetQtd;
-    const pct = targetVal > 0 ? Math.round((item.actualValue / targetVal) * 100) : 0;
-    
-    // Contabiliza para estatística se o dia já passou ou se teve lançamento
-    if (item.actualValue > 0 || !item.isToday) {
+    const effective = getEffectiveDayTarget(item.date, goals, holidaysCache);
+    const targetVal = effective.value;
+    const targetQtd = effective.count;
+    // Considera atingida se bateu meta de valor (apenas em dias úteis ou se houve faturamento extra)
+    const isAchieved =
+      targetVal > 0
+        ? item.actualValue >= targetVal
+        : effective.schedule.isWorkingDay
+        ? item.actualCount >= targetQtd
+        : item.actualValue > 0;
+    const pct = targetVal > 0 ? Math.round((item.actualValue / targetVal) * 100) : item.actualValue > 0 ? 100 : 0;
+
+    // Contabiliza para estatística apenas dias úteis avaliados (ou dias não úteis que tiveram serviço)
+    if ((effective.schedule.isWorkingDay && (item.actualValue > 0 || !item.isToday)) || item.actualValue > 0) {
       evaluatedDays++;
-      if (isAchieved && (item.actualValue > 0 || targetVal === 0)) {
+      if (isAchieved) {
         daysAchieved++;
       }
     }
@@ -257,6 +276,9 @@ export function computeGoalsAnalytics(
       pct,
       difference: item.actualValue - targetVal,
       isToday: item.isToday,
+      scheduleStatus: effective.schedule.status,
+      holidayName: effective.schedule.primaryHoliday?.name || effective.schedule.recessNote,
+      isWorkingDay: effective.schedule.isWorkingDay,
     };
   });
 
@@ -264,23 +286,37 @@ export function computeGoalsAnalytics(
   let weeksAchieved = 0;
   let evaluatedWeeks = 0;
   const weeklyItems: WeeklyGoalItem[] = Array.from(weeklyMap.entries()).map(([key, item]) => {
-    const targetVal = goals.metaSemanal || 0;
-    const targetQtd = goals.metaSemanalQtd || 0;
-    const isAchieved = targetVal > 0 ? item.actualValue >= targetVal : item.actualCount >= targetQtd;
-    const pct = targetVal > 0 ? Math.round((item.actualValue / targetVal) * 100) : 0;
+    const effectiveWeek = getEffectiveWeekTarget(item.startDate, goals, holidaysCache);
+    const targetVal = effectiveWeek.value;
+    const targetQtd = effectiveWeek.count;
+    const isAchieved =
+      targetVal > 0
+        ? item.actualValue >= targetVal
+        : effectiveWeek.workingDaysCount > 0
+        ? item.actualCount >= targetQtd
+        : item.actualValue > 0;
+    const pct = targetVal > 0 ? Math.round((item.actualValue / targetVal) * 100) : item.actualValue > 0 ? 100 : 0;
 
-    // Dias decorridos na semana
-    let daysInWeek = 7;
+    // Dias úteis decorridos na semana
+    let daysInWeek = Math.max(1, effectiveWeek.workingDaysCount || 7);
     if (item.isCurrentWeek) {
-      const currentDay = refDate.getDay();
-      daysInWeek = currentDay === 0 ? 7 : currentDay;
+      let workedSoFar = 0;
+      const cur = new Date(item.startDate);
+      const todayEnd = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 23, 59, 59);
+      while (cur <= todayEnd) {
+        if (getEffectiveDayTarget(cur, goals, holidaysCache).schedule.isWorkingDay) {
+          workedSoFar++;
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+      daysInWeek = Math.max(1, workedSoFar);
     }
     const dailyAvg = daysInWeek > 0 ? item.actualValue / daysInWeek : 0;
     const dailyAvgQtd = daysInWeek > 0 ? item.actualCount / daysInWeek : 0;
 
-    if (item.actualValue > 0 || !item.isCurrentWeek) {
+    if ((effectiveWeek.workingDaysCount > 0 && (item.actualValue > 0 || !item.isCurrentWeek)) || item.actualValue > 0) {
       evaluatedWeeks++;
-      if (isAchieved && (item.actualValue > 0 || targetVal === 0)) {
+      if (isAchieved) {
         weeksAchieved++;
       }
     }
@@ -304,15 +340,19 @@ export function computeGoalsAnalytics(
       pct,
       difference: item.actualValue - targetVal,
       isCurrentWeek: item.isCurrentWeek,
+      hasHolidayOrRecess: effectiveWeek.hasHolidayOrRecess,
+      workingDaysCount: effectiveWeek.workingDaysCount,
     };
   });
 
   // Constrói MonthlyGoalItem[]
   let monthsAchieved = 0;
   const monthlyItems: MonthlyGoalItem[] = Array.from(monthlyMap.entries()).map(([key, item]) => {
-    const targetVal = goals.metaMensal || 0;
-    const targetQtd = goals.metaMensalQtd || 0;
-    const isAchieved = targetVal > 0 ? item.actualValue >= targetVal : item.actualCount >= targetQtd;
+    const effectiveMonth = getEffectiveMonthTarget(item.year, item.monthIndex, goals, holidaysCache);
+    const targetVal = effectiveMonth.value;
+    const targetQtd = effectiveMonth.count;
+    const isAchieved =
+      targetVal > 0 ? item.actualValue >= targetVal : item.actualCount >= targetQtd;
     const pct = targetVal > 0 ? Math.round((item.actualValue / targetVal) * 100) : 0;
 
     const daysInMonth = new Date(item.year, item.monthIndex + 1, 0).getDate();

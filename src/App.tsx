@@ -194,7 +194,12 @@ export default function App() {
               services: mergedServices,
               clients: mergedClients,
               launches: finalLaunches,
-              goals: remoteData.goals || prev.goals,
+              goals: remoteData.goals
+                ? {
+                    ...remoteData.goals,
+                    calendarConfig: remoteData.goals.calendarConfig || prev.goals.calendarConfig,
+                  }
+                : prev.goals,
               accountsPlan: mergedAccountsPlan,
               financialEntries: mergedFinancialEntries,
               financialCustomFields: mergedCustomFields,
@@ -316,7 +321,12 @@ export default function App() {
             services: remote.services?.length ? remote.services : prev.services,
             clients: mergedClients,
             launches: Array.isArray(remote.launches) ? cleanRemote : prev.launches,
-            goals: remote.goals || prev.goals,
+            goals: remote.goals
+              ? {
+                  ...remote.goals,
+                  calendarConfig: remote.goals.calendarConfig || prev.goals.calendarConfig,
+                }
+              : prev.goals,
             accountsPlan: mergedAccountsPlan,
             financialEntries: mergedFinancialEntries,
             financialCustomFields: mergedCustomFields,

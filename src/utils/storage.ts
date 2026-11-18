@@ -8,6 +8,12 @@ import {
   FinancialEntry,
   FinancialCustomField,
 } from '../types';
+import {
+  defaultGoalsCalendarConfig,
+  normalizeCalendarConfig,
+  getEffectiveGoalsForDate,
+  EffectiveGoalsSnapshot,
+} from './holidaysCalendar';
 
 const STORAGE_KEY = 'autolava_sistema_v1';
 
@@ -354,6 +360,7 @@ export const defaultGoals: GoalsConfig = {
   metaDiariaQtd: 8,
   metaSemanalQtd: 50,
   metaMensalQtd: 90,
+  calendarConfig: defaultGoalsCalendarConfig,
 };
 
 export const defaultLaunches: ServiceLaunch[] = [];
@@ -640,12 +647,17 @@ export const loadStoredData = (): AppState => {
         ? parsed.financialCustomFields
         : defaultFinancialCustomFields;
 
+      const normalizedGoals: GoalsConfig = {
+        ...(parsed.goals || defaultGoals),
+        calendarConfig: normalizeCalendarConfig(parsed.goals?.calendarConfig),
+      };
+
       const state: AppState = {
         company: normalizedCompany,
         services: normalizedServices,
         clients: normalizedClients,
         launches: cleanLaunches,
-        goals: parsed.goals || defaultGoals,
+        goals: normalizedGoals,
         accountsPlan: rawAccountsPlan,
         financialEntries: rawFinancialEntries,
         financialCustomFields: rawCustomFields,
@@ -1005,6 +1017,7 @@ export interface LaunchMetrics {
   }>;
   todayLaunches: ServiceLaunch[];
   weekLaunches: ServiceLaunch[];
+  effectiveGoals: EffectiveGoalsSnapshot;
 }
 
 /**
@@ -1114,8 +1127,10 @@ export const calculateLaunchMetrics = (
     }
   });
 
+  const effectiveGoals = getEffectiveGoalsForDate(goals, now);
+
   const getPct = (actual: number, target: number) => {
-    if (!target || target <= 0) return 0;
+    if (!target || target <= 0) return actual > 0 ? 100 : 0;
     return Math.min(100, Math.round((actual / target) * 100));
   };
 
@@ -1145,13 +1160,13 @@ export const calculateLaunchMetrics = (
   return {
     totalHoje,
     qtdHoje,
-    pctDia: getPct(totalHoje, goals.metaDiaria),
+    pctDia: getPct(totalHoje, effectiveGoals.metaDiaria),
     totalSemana,
     qtdSemana,
-    pctSemana: getPct(totalSemana, goals.metaSemanal),
+    pctSemana: getPct(totalSemana, effectiveGoals.metaSemanal),
     totalMes,
     qtdMes,
-    pctMes: getPct(totalMes, goals.metaMensal),
+    pctMes: getPct(totalMes, effectiveGoals.metaMensal),
     totalGeral,
     qtdGeral,
     ticketMedioHoje: qtdHoje > 0 ? totalHoje / qtdHoje : 0,
@@ -1163,6 +1178,7 @@ export const calculateLaunchMetrics = (
     topClients,
     todayLaunches,
     weekLaunches,
+    effectiveGoals,
   };
 };
 

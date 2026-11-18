@@ -18,6 +18,7 @@ import {
   formatPlate,
   normalizePlate,
 } from '../utils/storage';
+import { normalizeCalendarConfig } from '../utils/holidaysCalendar';
 
 // Mapeamentos de / para o banco de dados Supabase
 
@@ -210,9 +211,13 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
       });
     }
 
-    // 5. Metas
+    // 5. Metas (inclui configuração do calendário de feriados e recessos quando presente)
     if (goalsRes.data) {
       const g = goalsRes.data;
+      const hasRemoteCal =
+        g.calendar_config &&
+        typeof g.calendar_config === 'object' &&
+        Object.keys(g.calendar_config).length > 0;
       state.goals = {
         metaDiaria: Number(g.meta_diaria) || 800,
         metaSemanal: Number(g.meta_semanal) || 4800,
@@ -220,6 +225,7 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
         metaDiariaQtd: Number(g.meta_diaria_qtd) || 12,
         metaSemanalQtd: Number(g.meta_semanal_qtd) || 70,
         metaMensalQtd: Number(g.meta_mensal_qtd) || 300,
+        calendarConfig: hasRemoteCal ? normalizeCalendarConfig(g.calendar_config) : undefined,
       };
     }
 
@@ -520,25 +526,36 @@ export async function clearAllLaunchesFromSupabase(): Promise<boolean> {
   }
 }
 
-// Sincronização de Metas
+// Sincronização de Metas (com calendário de feriados/recessos e fallback seguro)
 export async function syncGoalsToSupabase(goals: GoalsConfig): Promise<boolean> {
   const supabase = getSupabaseClient();
   if (!supabase) return false;
 
   try {
-    const { error } = await supabase.from('goals_config').upsert(
+    const basePayload = {
+      id: 'default',
+      meta_diaria: goals.metaDiaria,
+      meta_semanal: goals.metaSemanal,
+      meta_mensal: goals.metaMensal,
+      meta_diaria_qtd: goals.metaDiariaQtd,
+      meta_semanal_qtd: goals.metaSemanalQtd,
+      meta_mensal_qtd: goals.metaMensalQtd,
+      updated_at: new Date().toISOString(),
+    };
+
+    let { error } = await supabase.from('goals_config').upsert(
       {
-        id: 'default',
-        meta_diaria: goals.metaDiaria,
-        meta_semanal: goals.metaSemanal,
-        meta_mensal: goals.metaMensal,
-        meta_diaria_qtd: goals.metaDiariaQtd,
-        meta_semanal_qtd: goals.metaSemanalQtd,
-        meta_mensal_qtd: goals.metaMensalQtd,
-        updated_at: new Date().toISOString(),
+        ...basePayload,
+        calendar_config: goals.calendarConfig || {},
       },
       { onConflict: 'id' }
     );
+
+    if (error && (error.code === '42703' || error.message?.includes('calendar_config'))) {
+      const retry = await supabase.from('goals_config').upsert(basePayload, { onConflict: 'id' });
+      error = retry.error;
+    }
+
     return !error;
   } catch (e) {
     console.error(e);

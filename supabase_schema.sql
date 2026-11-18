@@ -62,9 +62,12 @@ CREATE TABLE IF NOT EXISTS public.goals_config (
   meta_diaria_qtd INTEGER NOT NULL DEFAULT 12 CHECK (meta_diaria_qtd >= 0),
   meta_semanal_qtd INTEGER NOT NULL DEFAULT 70 CHECK (meta_semanal_qtd >= 0),
   meta_mensal_qtd INTEGER NOT NULL DEFAULT 300 CHECK (meta_mensal_qtd >= 0),
+  calendar_config JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
 );
+
+ALTER TABLE public.goals_config ADD COLUMN IF NOT EXISTS calendar_config JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- 5. TABELA DE LANÇAMENTOS E ORDENS DE SERVIÇO
 CREATE TABLE IF NOT EXISTS public.service_launches (

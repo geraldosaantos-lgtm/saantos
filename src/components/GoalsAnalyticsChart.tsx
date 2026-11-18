@@ -9,6 +9,7 @@ import {
   WeeklyGoalItem,
   MonthlyGoalItem,
 } from '../utils/goalsAnalytics';
+import { getEffectiveGoalsForDate } from '../utils/holidaysCalendar';
 import {
   BarChart3,
   Calendar,
@@ -62,11 +63,21 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
   });
 
   const { dailyItems, weeklyItems, monthlyItems, summary } = analytics;
+  const effectiveToday = getEffectiveGoalsForDate(goals);
 
-  // Valor da meta de acordo com a métrica selecionada
-  const targetDaily = metric === 'valor' ? goals.metaDiaria : goals.metaDiariaQtd;
-  const targetWeekly = metric === 'valor' ? goals.metaSemanal : goals.metaSemanalQtd;
-  const targetMonthly = metric === 'valor' ? goals.metaMensal : goals.metaMensalQtd;
+  // Valor da meta de acordo com a métrica selecionada (já considerando calendário de feriados/recessos)
+  const targetDaily =
+    metric === 'valor'
+      ? effectiveToday.metaDiaria || goals.metaDiaria
+      : effectiveToday.metaDiariaQtd || goals.metaDiariaQtd;
+  const targetWeekly =
+    metric === 'valor'
+      ? effectiveToday.metaSemanal || goals.metaSemanal
+      : effectiveToday.metaSemanalQtd || goals.metaSemanalQtd;
+  const targetMonthly =
+    metric === 'valor'
+      ? effectiveToday.metaMensal || goals.metaMensal
+      : effectiveToday.metaMensalQtd || goals.metaMensalQtd;
 
   const formatMetricVal = (val: number) => {
     return metric === 'valor' ? formatCurrency(val) : `${Math.round(val)} veículos`;
@@ -356,8 +367,19 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
             >
               {dailyItems.map((item) => {
                 const val = metric === 'valor' ? item.actualValue : item.actualCount;
+                const itemTarget = metric === 'valor' ? item.targetValue : item.targetCount;
                 const heightPercent = maxDailyVal > 0 ? Math.max(6, Math.round((val / maxDailyVal) * 100)) : 6;
-                const isAchieved = item.isAchieved && (val > 0 || targetDaily === 0);
+                const isAchieved = item.isAchieved && (val > 0 || itemTarget === 0);
+                const statusTag =
+                  item.scheduleStatus === 'recesso'
+                    ? 'Recesso / Prolongado'
+                    : item.scheduleStatus === 'feriado_folga'
+                    ? `Feriado Folga${item.holidayName ? `: ${item.holidayName}` : ''}`
+                    : item.scheduleStatus === 'feriado_trabalhado'
+                    ? `Feriado Trabalhado${item.holidayName ? `: ${item.holidayName}` : ''}`
+                    : item.scheduleStatus === 'folga_semanal'
+                    ? 'Folga semanal'
+                    : undefined;
 
                 return (
                   <div
@@ -365,9 +387,9 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
                     className="flex-1 flex flex-col items-center gap-1.5 group cursor-pointer"
                     onMouseEnter={() =>
                       setHoveredItem({
-                        title: `${item.dayLabel}, ${item.shortDate}`,
+                        title: `${item.dayLabel}, ${item.shortDate}${statusTag ? ` · ${statusTag}` : ''}`,
                         actual: formatMetricVal(val),
-                        target: formatMetricVal(targetDaily),
+                        target: formatMetricVal(itemTarget),
                         pct: item.pct,
                         isAchieved,
                         diff: item.difference >= 0 ? `+${formatMetricVal(item.difference)}` : formatMetricVal(item.difference),
@@ -376,9 +398,17 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
                     }
                     onMouseLeave={() => setHoveredItem(null)}
                   >
-                    {/* Badge de Meta Atingida no Topo da Barra */}
+                    {/* Badge de Meta Atingida ou Feriado/Recesso no Topo da Barra */}
                     <div className="h-4 flex items-center justify-center">
-                      {isAchieved ? (
+                      {item.scheduleStatus === 'recesso' ? (
+                        <span className="text-[8px] font-bold text-purple-800 bg-purple-100 border border-purple-300 px-1 py-0.2 rounded-full whitespace-nowrap">
+                          Recesso
+                        </span>
+                      ) : item.scheduleStatus === 'feriado_folga' ? (
+                        <span className="text-[8px] font-bold text-rose-800 bg-rose-100 border border-rose-300 px-1 py-0.2 rounded-full whitespace-nowrap">
+                          Feriado
+                        </span>
+                      ) : isAchieved ? (
                         <span className="text-[8px] sm:text-[9px] font-extrabold text-emerald-700 bg-emerald-100 border border-emerald-300 px-1 py-0.2 rounded-full whitespace-nowrap">
                           ✓ Bateu
                         </span>
@@ -493,8 +523,9 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 sm:gap-3 min-h-[220px] pt-8 pb-1">
               {weeklyItems.map((w) => {
                 const val = metric === 'valor' ? w.actualValue : w.actualCount;
+                const wTarget = metric === 'valor' ? w.targetValue : w.targetCount;
                 const heightPercent = maxWeeklyVal > 0 ? Math.max(8, Math.round((val / maxWeeklyVal) * 100)) : 8;
-                const isAchieved = w.isAchieved && (val > 0 || targetWeekly === 0);
+                const isAchieved = w.isAchieved && (val > 0 || wTarget === 0);
 
                 return (
                   <div
@@ -502,9 +533,9 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
                     className="flex flex-col items-center gap-1.5 group cursor-pointer"
                     onMouseEnter={() =>
                       setHoveredItem({
-                        title: `${w.weekLabel} (${w.dateRangeLabel})`,
+                        title: `${w.weekLabel} (${w.dateRangeLabel}) · ${w.workingDaysCount}d úteis${w.hasHolidayOrRecess ? ' [Recalculada]' : ''}`,
                         actual: formatMetricVal(val),
-                        target: formatMetricVal(targetWeekly),
+                        target: formatMetricVal(wTarget),
                         pct: w.pct,
                         isAchieved,
                         diff: w.difference >= 0 ? `+${formatMetricVal(w.difference)}` : formatMetricVal(w.difference),
@@ -513,7 +544,7 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
                     }
                     onMouseLeave={() => setHoveredItem(null)}
                   >
-                    <div className="h-4 flex items-center justify-center">
+                    <div className="h-4 flex items-center justify-center gap-1">
                       {isAchieved ? (
                         <span className="text-[9px] font-extrabold text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.2 rounded-full whitespace-nowrap">
                           ✓ Meta Batida
@@ -521,6 +552,11 @@ export const GoalsAnalyticsChart: React.FC<GoalsAnalyticsChartProps> = ({
                       ) : (
                         <span className="text-[9px] font-mono text-neutral-500 font-bold">
                           {w.pct}%
+                        </span>
+                      )}
+                      {w.hasHolidayOrRecess && (
+                        <span className="text-[8px] font-bold text-purple-800 bg-purple-100 px-1 rounded">
+                          {w.workingDaysCount}d
                         </span>
                       )}
                     </div>

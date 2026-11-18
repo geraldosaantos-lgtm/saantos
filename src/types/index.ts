@@ -91,6 +91,42 @@ export interface ServiceLaunch {
   status: 'Concluído' | 'Em Andamento';
 }
 
+export type HolidayScope =
+  | 'nacional'
+  | 'estadual'
+  | 'municipal'
+  | 'ponto_facultativo'
+  | 'personalizado';
+
+export type GoalRedistributeMode =
+  | 'mensal_para_dias_uteis'
+  | 'semanal_para_dias_uteis'
+  | 'proporcional_dias_uteis';
+
+export interface CalendarHolidayItem {
+  id: string;
+  date: string; // YYYY-MM-DD
+  name: string;
+  scope: HolidayScope;
+  uf?: string;
+  city?: string;
+  trabalhado: boolean; // true = feriado será trabalhado; false = folga
+  isCustom?: boolean;
+}
+
+export interface GoalsCalendarConfig {
+  applyToGoals: boolean;
+  uf: string;
+  cidade: string;
+  workingDaysOfWeek: number[]; // 0=Dom, 1=Seg ... 6=Sáb
+  redistributeMode: GoalRedistributeMode;
+  holidays: CalendarHolidayItem[]; // Feriados personalizados ou overrides (trabalhado/folga)
+  removedHolidayKeys?: string[]; // Chaves `${date}__${name}` de feriados automáticos ocultados pelo usuário
+  recessoDates: string[]; // Datas YYYY-MM-DD marcadas como recesso / feriado prolongado
+  recessoNotes?: Record<string, string>; // Descrição opcional por data de recesso
+  extraWorkingDates?: string[]; // Datas fora do padrão (ex: sábado/domingo) marcadas como dia trabalhado
+}
+
 export interface GoalsConfig {
   metaDiaria: number; // R$
   metaSemanal: number; // R$
@@ -98,6 +134,7 @@ export interface GoalsConfig {
   metaDiariaQtd: number; // Qtd veículos
   metaSemanalQtd: number;
   metaMensalQtd: number;
+  calendarConfig?: GoalsCalendarConfig;
 }
 
 export type AccountPlanType = 'receita' | 'despesa';
