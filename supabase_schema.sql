@@ -162,3 +162,75 @@ WITH CHECK (bucket_id = 'autolava_media');
 INSERT INTO public.goals_config (id, meta_diaria, meta_semanal, meta_mensal, meta_diaria_qtd, meta_semanal_qtd, meta_mensal_qtd)
 VALUES ('default', 800.00, 4800.00, 22000.00, 12, 70, 300)
 ON CONFLICT (id) DO NOTHING;
+
+-- 6. PLANO DE CONTAS (RECEITAS E DESPESAS)
+CREATE TABLE IF NOT EXISTS public.accounts_plan (
+  id TEXT PRIMARY KEY,
+  codigo TEXT NOT NULL DEFAULT '',
+  nome TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT 'despesa',
+  grupo TEXT NOT NULL DEFAULT 'GERAL',
+  descricao TEXT DEFAULT '',
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- 7. CAMPOS PERSONALIZADOS DO FINANCEIRO
+CREATE TABLE IF NOT EXISTS public.financial_custom_fields (
+  id TEXT PRIMARY KEY,
+  nome TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT 'texto',
+  opcoes JSONB DEFAULT '[]'::jsonb,
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- 8. MOVIMENTAÇÕES FINANCEIRAS E EXTRATO BANCÁRIO
+CREATE TABLE IF NOT EXISTS public.financial_entries (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  descricao TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT 'despesa',
+  conta_id TEXT DEFAULT '',
+  conta_nome TEXT NOT NULL DEFAULT '',
+  grupo TEXT NOT NULL DEFAULT '',
+  valor NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  banco TEXT DEFAULT 'CAIXA',
+  forma_pagamento TEXT DEFAULT '',
+  documento TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'Conciliado',
+  origem TEXT NOT NULL DEFAULT 'manual',
+  observacoes TEXT DEFAULT '',
+  campos_extras JSONB NOT NULL DEFAULT '{}'::jsonb,
+  criado_em TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+CREATE INDEX IF NOT EXISTS idx_financial_entries_data ON public.financial_entries(data DESC);
+CREATE INDEX IF NOT EXISTS idx_financial_entries_tipo ON public.financial_entries(tipo);
+
+DROP TRIGGER IF EXISTS set_accounts_plan_updated_at ON public.accounts_plan;
+CREATE TRIGGER set_accounts_plan_updated_at BEFORE UPDATE ON public.accounts_plan FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS set_financial_custom_fields_updated_at ON public.financial_custom_fields;
+CREATE TRIGGER set_financial_custom_fields_updated_at BEFORE UPDATE ON public.financial_custom_fields FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS set_financial_entries_updated_at ON public.financial_entries;
+CREATE TRIGGER set_financial_entries_updated_at BEFORE UPDATE ON public.financial_entries FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+ALTER TABLE public.accounts_plan ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.financial_custom_fields ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.financial_entries ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Permitir select anon accounts_plan" ON public.accounts_plan FOR SELECT USING (true);
+CREATE POLICY "Permitir all anon accounts_plan" ON public.accounts_plan FOR ALL USING (true) WITH CHECK (true);
+
+CREATE POLICY "Permitir select anon financial_custom_fields" ON public.financial_custom_fields FOR SELECT USING (true);
+CREATE POLICY "Permitir all anon financial_custom_fields" ON public.financial_custom_fields FOR ALL USING (true) WITH CHECK (true);
+
+CREATE POLICY "Permitir select anon financial_entries" ON public.financial_entries FOR SELECT USING (true);
+CREATE POLICY "Permitir all anon financial_entries" ON public.financial_entries FOR ALL USING (true) WITH CHECK (true);
+

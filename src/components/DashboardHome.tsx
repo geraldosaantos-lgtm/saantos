@@ -1,5 +1,14 @@
 import React, { useState } from 'react';
-import { CompanyProfile, GoalsConfig, ServiceLaunch, Client, ServiceItem, ActiveTab } from '../types';
+import {
+  CompanyProfile,
+  GoalsConfig,
+  ServiceLaunch,
+  Client,
+  ServiceItem,
+  ActiveTab,
+  FinancialEntry,
+  AccountPlanItem,
+} from '../types';
 import {
   formatCurrency,
   formatDateTime,
@@ -7,6 +16,7 @@ import {
   getWeekRange,
 } from '../utils/storage';
 import { GoalsAnalyticsChart } from './GoalsAnalyticsChart';
+import { FinancialDashboard } from './FinancialDashboard';
 import {
   Car,
   Users,
@@ -29,7 +39,8 @@ import {
   Award,
   ShieldCheck,
   Mail,
-  ChevronRight
+  ChevronRight,
+  Wallet
 } from 'lucide-react';
 
 interface DashboardHomeProps {
@@ -38,8 +49,11 @@ interface DashboardHomeProps {
   launches: ServiceLaunch[];
   clients?: Client[];
   services?: ServiceItem[];
+  financialEntries?: FinancialEntry[];
+  accountsPlan?: AccountPlanItem[];
   onOpenLancamento: () => void;
   onNavigateTab: (tab: ActiveTab) => void;
+  onOpenFinanceiro?: (subTab?: 'movimentacoes' | 'extrato' | 'plano') => void;
   onOpenCompanyModal: () => void;
   onSendEmail?: (launch: ServiceLaunch) => void;
 }
@@ -50,11 +64,15 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   launches,
   clients = [],
   services = [],
+  financialEntries = [],
+  accountsPlan = [],
   onOpenLancamento,
   onNavigateTab,
+  onOpenFinanceiro,
   onOpenCompanyModal,
   onSendEmail,
 }) => {
+  const [dashboardSubTab, setDashboardSubTab] = useState<'operacional' | 'financeiro'>('operacional');
   const [selectedPeriod, setSelectedPeriod] = useState<'hoje' | 'semana' | 'mes' | 'todos'>('hoje');
 
   // Cálculos do motor de métricas em tempo real
@@ -122,9 +140,56 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   const maxDayValue = Math.max(...metrics.last7Days.map((d) => d.total), 100);
 
   return (
-    <div className="space-y-6">
-      {/* 1. TOPO: TÍTULO DO DASHBOARD + FILTRO DE PERÍODO + BOTÃO NOVO LANÇAMENTO */}
-      <div className="bg-white border border-neutral-200 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-5">
+      {/* Seletor de Visão do Dashboard: Operacional vs Financeiro (sem misturar os dados) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-neutral-200 rounded-2xl p-2.5 sm:px-4 sm:py-2.5 shadow-2xs">
+        <div className="flex items-center gap-1.5 bg-neutral-100 p-1 rounded-xl w-full sm:w-auto">
+          <button
+            onClick={() => setDashboardSubTab('operacional')}
+            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-2 whitespace-nowrap ${
+              dashboardSubTab === 'operacional'
+                ? 'bg-white text-neutral-950 font-bold shadow-2xs'
+                : 'text-neutral-600 hover:text-neutral-950'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5 text-neutral-800" />
+            Dashboard Operacional
+          </button>
+          <button
+            onClick={() => setDashboardSubTab('financeiro')}
+            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-2 whitespace-nowrap ${
+              dashboardSubTab === 'financeiro'
+                ? 'bg-white text-neutral-950 font-bold shadow-2xs'
+                : 'text-neutral-600 hover:text-neutral-950'
+            }`}
+          >
+            <Wallet className="w-3.5 h-3.5 text-emerald-700" />
+            Dashboard Financeiro
+          </button>
+        </div>
+
+        <span className="text-[11px] text-neutral-500 hidden md:inline">
+          {dashboardSubTab === 'operacional'
+            ? 'Exibindo indicadores operacionais de pátio, metas e ordens de serviço.'
+            : 'Exibindo fluxo financeiro separado: receitas, despesas, plano de contas e extrato.'}
+        </span>
+      </div>
+
+      {dashboardSubTab === 'financeiro' ? (
+        <FinancialDashboard
+          company={company}
+          entries={financialEntries}
+          accountsPlan={accountsPlan}
+          launches={launches}
+          onOpenFinanceiro={(subTab) => {
+            if (onOpenFinanceiro) onOpenFinanceiro(subTab);
+            else onNavigateTab('financeiro');
+          }}
+        />
+      ) : (
+        <div className="space-y-6">
+          {/* 1. TOPO: TÍTULO DO DASHBOARD + FILTRO DE PERÍODO + BOTÃO NOVO LANÇAMENTO */}
+          <div className="bg-white border border-neutral-200 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="p-2 bg-neutral-900 text-white rounded-xl shadow-xs">
@@ -758,6 +823,8 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           </button>
         </div>
       </div>
+        </div>
+      )}
     </div>
   );
 };

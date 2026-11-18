@@ -1,4 +1,13 @@
-import { CompanyProfile, Client, ServiceItem, ServiceLaunch, GoalsConfig } from '../types';
+import {
+  CompanyProfile,
+  Client,
+  ServiceItem,
+  ServiceLaunch,
+  GoalsConfig,
+  AccountPlanItem,
+  FinancialEntry,
+  FinancialCustomField,
+} from '../types';
 
 const STORAGE_KEY = 'autolava_sistema_v1';
 
@@ -349,6 +358,141 @@ export const defaultGoals: GoalsConfig = {
 
 export const defaultLaunches: ServiceLaunch[] = [];
 
+export const defaultAccountsPlan: AccountPlanItem[] = [
+  {
+    id: 'acc-rec-1',
+    codigo: '1.01',
+    nome: 'SERVIÇOS DE LAVAGEM E ESTÉTICA',
+    tipo: 'receita',
+    grupo: 'RECEITAS OPERACIONAIS',
+    descricao: 'Entradas provenientes de lavagens avulsas e serviços no pátio',
+    ativo: true,
+  },
+  {
+    id: 'acc-rec-2',
+    codigo: '1.02',
+    nome: 'CONTRATOS DE FROTAS / MENSALISTAS',
+    tipo: 'receita',
+    grupo: 'RECEITAS OPERACIONAIS',
+    descricao: 'Recebimentos de faturas e boletos de clientes corporativos',
+    ativo: true,
+  },
+  {
+    id: 'acc-rec-3',
+    codigo: '1.03',
+    nome: 'POLIMENTO, HIGIENIZAÇÃO E EXTRAS',
+    tipo: 'receita',
+    grupo: 'RECEITAS OPERACIONAIS',
+    descricao: 'Serviços especiais de estética e higienização',
+    ativo: true,
+  },
+  {
+    id: 'acc-rec-4',
+    codigo: '1.04',
+    nome: 'OUTRAS RECEITAS / RENDIMENTOS',
+    tipo: 'receita',
+    grupo: 'RECEITAS FINANCEIRAS',
+    descricao: 'Rendimentos bancários, reembolsos e entradas diversas',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-1',
+    codigo: '2.01',
+    nome: 'PRODUTOS QUÍMICOS E INSUMOS',
+    tipo: 'despesa',
+    grupo: 'INSUMOS E MATERIAIS',
+    descricao: 'Shampoo, cera, desengraxante, pretinho, panos e EPIs',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-2',
+    codigo: '2.02',
+    nome: 'FOLHA DE PAGAMENTO / DIÁRIAS / COMISSÕES',
+    tipo: 'despesa',
+    grupo: 'PESSOAL E ENCARGOS',
+    descricao: 'Salários, diárias de lavadores, encargos e benefícios',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-3',
+    codigo: '2.03',
+    nome: 'ALUGUEL DO PÁTIO / CONDOMÍNIO',
+    tipo: 'despesa',
+    grupo: 'DESPESAS FIXAS',
+    descricao: 'Locação do espaço operacional e taxas prediais',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-4',
+    codigo: '2.04',
+    nome: 'ÁGUA E ESGOTO',
+    tipo: 'despesa',
+    grupo: 'DESPESAS FIXAS',
+    descricao: 'Fatura mensal de abastecimento de água',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-5',
+    codigo: '2.05',
+    nome: 'ENERGIA ELÉTRICA',
+    tipo: 'despesa',
+    grupo: 'DESPESAS FIXAS',
+    descricao: 'Conta de energia elétrica do pátio e compressores',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-6',
+    codigo: '2.06',
+    nome: 'MANUTENÇÃO DE EQUIPAMENTOS',
+    tipo: 'despesa',
+    grupo: 'MANUTENÇÃO',
+    descricao: 'Reparos em lavadoras de alta pressão, mangueiras e bombas',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-7',
+    codigo: '2.07',
+    nome: 'IMPOSTOS, DAS / SIMPLES E TAXAS',
+    tipo: 'despesa',
+    grupo: 'IMPOSTOS E TAXAS',
+    descricao: 'Guias de impostos, alvarás e contabilidade',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-8',
+    codigo: '2.08',
+    nome: 'TARIFAS BANCÁRIAS E MAQUININHA',
+    tipo: 'despesa',
+    grupo: 'DESPESAS FINANCEIRAS',
+    descricao: 'Tarifas de conta corrente, boletos, PIX e cartão',
+    ativo: true,
+  },
+  {
+    id: 'acc-desp-9',
+    codigo: '2.09',
+    nome: 'COMBUSTÍVEL E DESPESAS GERAIS',
+    tipo: 'despesa',
+    grupo: 'DESPESAS VARIÁVEIS',
+    descricao: 'Deslocamentos, alimentação, internet e materiais de escritório',
+    ativo: true,
+  },
+];
+
+export const defaultFinancialCustomFields: FinancialCustomField[] = [
+  {
+    id: 'fld-fornecedor',
+    nome: 'Fornecedor / Pagador',
+    tipo: 'texto',
+    ativo: true,
+  },
+  {
+    id: 'fld-centro-custo',
+    nome: 'Centro de Custo',
+    tipo: 'texto',
+    ativo: true,
+  },
+];
+
 export const DEMO_LAUNCH_IDS = ['lnc-1', 'lnc-2', 'lnc-3'];
 export const DEMO_LAUNCH_OS = ['OS-00101', 'OS-00102', 'OS-00103'];
 
@@ -358,6 +502,9 @@ export interface AppState {
   clients: Client[];
   launches: ServiceLaunch[];
   goals: GoalsConfig;
+  accountsPlan: AccountPlanItem[];
+  financialEntries: FinancialEntry[];
+  financialCustomFields: FinancialCustomField[];
 }
 
 export const loadStoredData = (): AppState => {
@@ -455,12 +602,53 @@ export const loadStoredData = (): AppState => {
           : [],
       }));
 
+      const rawAccountsPlan: AccountPlanItem[] =
+        Array.isArray(parsed.accountsPlan) && parsed.accountsPlan.length > 0
+          ? parsed.accountsPlan.map((a: any) => ({
+              id: a.id || `acc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              codigo: (a.codigo || '').toUpperCase(),
+              nome: (a.nome || '').toUpperCase(),
+              tipo: a.tipo === 'receita' ? 'receita' : 'despesa',
+              grupo: (a.grupo || 'GERAL').toUpperCase(),
+              descricao: a.descricao || '',
+              ativo: a.ativo !== false,
+            }))
+          : defaultAccountsPlan;
+
+      const rawFinancialEntries: FinancialEntry[] = Array.isArray(parsed.financialEntries)
+        ? parsed.financialEntries.map((f: any) => ({
+            ...f,
+            id: f.id || `fin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            data: f.data || new Date().toISOString().slice(0, 10),
+            descricao: (f.descricao || '').toUpperCase(),
+            tipo: f.tipo === 'receita' ? 'receita' : 'despesa',
+            contaId: f.contaId || '',
+            contaNome: (f.contaNome || '').toUpperCase(),
+            grupo: (f.grupo || '').toUpperCase(),
+            valor: Math.abs(Number(f.valor) || 0),
+            banco: (f.banco || 'CAIXA').toUpperCase(),
+            formaPagamento: (f.formaPagamento || '').toUpperCase(),
+            documento: (f.documento || '').toUpperCase(),
+            status: f.status === 'Pendente' ? 'Pendente' : 'Conciliado',
+            origem: f.origem || 'manual',
+            observacoes: (f.observacoes || '').toUpperCase(),
+            camposExtras: f.camposExtras && typeof f.camposExtras === 'object' ? f.camposExtras : {},
+          }))
+        : [];
+
+      const rawCustomFields: FinancialCustomField[] = Array.isArray(parsed.financialCustomFields)
+        ? parsed.financialCustomFields
+        : defaultFinancialCustomFields;
+
       const state: AppState = {
         company: normalizedCompany,
         services: normalizedServices,
         clients: normalizedClients,
         launches: cleanLaunches,
         goals: parsed.goals || defaultGoals,
+        accountsPlan: rawAccountsPlan,
+        financialEntries: rawFinancialEntries,
+        financialCustomFields: rawCustomFields,
       };
 
       // Salva o estado normalizado em maiúsculo (exceto e-mails)
@@ -478,6 +666,9 @@ export const loadStoredData = (): AppState => {
     clients: defaultClients,
     launches: [],
     goals: defaultGoals,
+    accountsPlan: defaultAccountsPlan,
+    financialEntries: [],
+    financialCustomFields: defaultFinancialCustomFields,
   };
 };
 

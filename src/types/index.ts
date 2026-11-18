@@ -100,4 +100,52 @@ export interface GoalsConfig {
   metaMensalQtd: number;
 }
 
-export type ActiveTab = 'inicio' | 'lancamentos' | 'clientes' | 'servicos' | 'metas' | 'relatorios';
+export type AccountPlanType = 'receita' | 'despesa';
+
+export interface AccountPlanItem {
+  id: string;
+  codigo: string;
+  nome: string;
+  tipo: AccountPlanType;
+  grupo: string;
+  descricao?: string;
+  ativo: boolean;
+}
+
+export type CustomFieldInputType = 'texto' | 'numero' | 'data' | 'selecao';
+
+export interface FinancialCustomField {
+  id: string;
+  nome: string;
+  tipo: CustomFieldInputType;
+  opcoes?: string[];
+  ativo: boolean;
+}
+
+export interface FinancialEntry {
+  id: string;
+  data: string; // YYYY-MM-DD
+  descricao: string;
+  tipo: AccountPlanType;
+  contaId: string;
+  contaNome: string;
+  grupo: string;
+  valor: number;
+  banco: string;
+  formaPagamento?: string;
+  documento?: string;
+  status: 'Conciliado' | 'Pendente';
+  origem: 'manual' | 'extrato' | 'modelo';
+  observacoes?: string;
+  camposExtras?: Record<string, string>;
+  criadoEm?: string;
+}
+
+export type ActiveTab =
+  | 'inicio'
+  | 'lancamentos'
+  | 'clientes'
+  | 'servicos'
+  | 'metas'
+  | 'financeiro'
+  | 'relatorios';

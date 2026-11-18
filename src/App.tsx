@@ -6,6 +6,9 @@ import {
   ServiceItem,
   ServiceLaunch,
   GoalsConfig,
+  AccountPlanItem,
+  FinancialEntry,
+  FinancialCustomField,
 } from './types';
 import {
   loadStoredData,
@@ -14,6 +17,8 @@ import {
   normalizePlate,
   formatPlate,
   findPlateOwner,
+  defaultAccountsPlan,
+  defaultFinancialCustomFields,
 } from './utils/storage';
 import { generateLaunchEmailContent, openEmailClient } from './utils/emailService';
 import { getSupabaseConfig, getSupabaseClient } from './lib/supabase';
@@ -28,6 +33,12 @@ import {
   deleteLaunchFromSupabase,
   clearAllLaunchesFromSupabase,
   syncGoalsToSupabase,
+  syncAccountPlanToSupabase,
+  deleteAccountPlanFromSupabase,
+  syncFinancialEntryToSupabase,
+  deleteFinancialEntryFromSupabase,
+  syncFinancialCustomFieldToSupabase,
+  deleteFinancialCustomFieldFromSupabase,
   uploadAllLocalDataToSupabase,
 } from './services/supabaseService';
 import { DashboardHome } from './components/DashboardHome';
@@ -37,6 +48,7 @@ import { ClientesView } from './components/ClientesView';
 import { ServicosView } from './components/ServicosView';
 import { MetasView } from './components/MetasView';
 import { RelatoriosView } from './components/RelatoriosView';
+import { FinanceiroView } from './components/FinanceiroView';
 import { CompanyModal } from './components/CompanyModal';
 import { InfraModal } from './components/InfraModal';
 import { EmailModal } from './components/EmailModal';
@@ -56,7 +68,8 @@ import {
   AlertCircle,
   MoreHorizontal,
   RefreshCw,
-  Check
+  Check,
+  Wallet,
 } from 'lucide-react';
 
 export default function App() {
@@ -77,6 +90,7 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
   const [infraInitialTab, setInfraInitialTab] = useState<'supabase' | 'migrations' | 'sql' | 'vercel' | 'github'>('supabase');
+  const [financeiroInitialSubTab, setFinanceiroInitialSubTab] = useState<'movimentacoes' | 'extrato' | 'plano'>('movimentacoes');
 
   // Inicialização e Sincronização em Tempo Real (Celular + Computador)
   useEffect(() => {
@@ -146,6 +160,32 @@ export default function App() {
               syncCompanyToSupabase(prev.company);
             }
 
+            // Plano de Contas Financeiro
+            const remoteAccounts = remoteData.accountsPlan || [];
+            const remoteAccountIds = new Set(remoteAccounts.map((a) => a.id));
+            const localOnlyAccounts = (prev.accountsPlan || []).filter((a) => !remoteAccountIds.has(a.id));
+            const mergedAccountsPlan =
+              remoteAccounts.length > 0 ? [...remoteAccounts, ...localOnlyAccounts] : prev.accountsPlan;
+
+            // Campos Personalizados Financeiros
+            const remoteCustomFields = remoteData.financialCustomFields || [];
+            const remoteFieldIds = new Set(remoteCustomFields.map((f) => f.id));
+            const localOnlyFields = (prev.financialCustomFields || []).filter((f) => !remoteFieldIds.has(f.id));
+            const mergedCustomFields =
+              remoteCustomFields.length > 0
+                ? [...remoteCustomFields, ...localOnlyFields]
+                : prev.financialCustomFields;
+
+            // Movimentações Financeiras
+            const remoteFinancialEntries = remoteData.financialEntries || [];
+            const remoteFinIds = new Set(remoteFinancialEntries.map((e) => e.id));
+            const localOnlyFinEntries = (prev.financialEntries || []).filter((e) => !remoteFinIds.has(e.id));
+            if (localOnlyFinEntries.length > 0) {
+              localOnlyFinEntries.forEach((e) => syncFinancialEntryToSupabase(e));
+            }
+            const mergedFinancialEntries = [...remoteFinancialEntries, ...localOnlyFinEntries];
+            mergedFinancialEntries.sort((a, b) => b.data.localeCompare(a.data));
+
             const finalLaunches = [...remoteLaunches, ...localOnlyLaunches];
             finalLaunches.sort((a, b) => new Date(b.dataHora).getTime() - new Date(a.dataHora).getTime());
 
@@ -155,6 +195,9 @@ export default function App() {
               clients: mergedClients,
               launches: finalLaunches,
               goals: remoteData.goals || prev.goals,
+              accountsPlan: mergedAccountsPlan,
+              financialEntries: mergedFinancialEntries,
+              financialCustomFields: mergedCustomFields,
             };
 
             saveStoredData(merged);
@@ -246,12 +289,37 @@ export default function App() {
           const mergedClients =
             remoteClients.length > 0 ? [...remoteClients, ...localOnlyClients] : prev.clients;
 
+          const remoteAccounts = remote.accountsPlan || [];
+          const remoteAccountIds = new Set(remoteAccounts.map((a) => a.id));
+          const localOnlyAccounts = (prev.accountsPlan || []).filter((a) => !remoteAccountIds.has(a.id));
+          const mergedAccountsPlan =
+            remoteAccounts.length > 0 ? [...remoteAccounts, ...localOnlyAccounts] : prev.accountsPlan;
+
+          const remoteCustomFields = remote.financialCustomFields || [];
+          const remoteFieldIds = new Set(remoteCustomFields.map((f) => f.id));
+          const localOnlyFields = (prev.financialCustomFields || []).filter((f) => !remoteFieldIds.has(f.id));
+          const mergedCustomFields =
+            remoteCustomFields.length > 0
+              ? [...remoteCustomFields, ...localOnlyFields]
+              : prev.financialCustomFields;
+
+          const remoteFinancialEntries = remote.financialEntries || [];
+          const remoteFinIds = new Set(remoteFinancialEntries.map((e) => e.id));
+          const localOnlyFinEntries = (prev.financialEntries || []).filter((e) => !remoteFinIds.has(e.id));
+          const mergedFinancialEntries =
+            remoteFinancialEntries.length > 0
+              ? [...remoteFinancialEntries, ...localOnlyFinEntries]
+              : prev.financialEntries;
+
           const merged: AppState = {
             company: remote.company?.isConfigured ? remote.company : prev.company,
             services: remote.services?.length ? remote.services : prev.services,
             clients: mergedClients,
             launches: Array.isArray(remote.launches) ? cleanRemote : prev.launches,
             goals: remote.goals || prev.goals,
+            accountsPlan: mergedAccountsPlan,
+            financialEntries: mergedFinancialEntries,
+            financialCustomFields: mergedCustomFields,
           };
           saveStoredData(merged);
           return merged;
@@ -521,13 +589,137 @@ export default function App() {
     syncGoalsToSupabase(updatedGoals);
   };
 
+  // Handlers para Financeiro (Movimentações, Plano de Contas e Campos Personalizados)
+  const handleSaveFinancialEntry = (entry: FinancialEntry) => {
+    updateData((prev) => {
+      const idx = (prev.financialEntries || []).findIndex((e) => e.id === entry.id);
+      let nextEntries = [...(prev.financialEntries || [])];
+      if (idx >= 0) {
+        nextEntries[idx] = entry;
+      } else {
+        nextEntries = [entry, ...nextEntries];
+      }
+      nextEntries.sort((a, b) => b.data.localeCompare(a.data));
+      return {
+        ...prev,
+        financialEntries: nextEntries,
+      };
+    });
+    syncFinancialEntryToSupabase(entry);
+  };
+
+  const handleSaveFinancialEntriesBatch = (batch: FinancialEntry[]) => {
+    if (!batch.length) return;
+    updateData((prev) => {
+      const map = new Map<string, FinancialEntry>(
+        (prev.financialEntries || []).map((e) => [e.id, e])
+      );
+      batch.forEach((entry) => map.set(entry.id, entry));
+      const nextEntries = Array.from(map.values()).sort((a, b) => b.data.localeCompare(a.data));
+      return {
+        ...prev,
+        financialEntries: nextEntries,
+      };
+    });
+    batch.forEach((entry) => syncFinancialEntryToSupabase(entry));
+    setSyncStatusMsg(`${batch.length} movimentação(ões) financeira(s) salva(s) com sucesso!`);
+    setTimeout(() => setSyncStatusMsg(null), 3500);
+  };
+
+  const handleDeleteFinancialEntry = (id: string) => {
+    updateData((prev) => ({
+      ...prev,
+      financialEntries: (prev.financialEntries || []).filter((e) => e.id !== id),
+    }));
+    deleteFinancialEntryFromSupabase(id);
+  };
+
+  const handleDeleteFinancialEntriesBatch = (ids: string[]) => {
+    if (!ids.length) return;
+    const idSet = new Set(ids);
+    updateData((prev) => ({
+      ...prev,
+      financialEntries: (prev.financialEntries || []).filter((e) => !idSet.has(e.id)),
+    }));
+    ids.forEach((id) => deleteFinancialEntryFromSupabase(id));
+  };
+
+  const handleSaveAccountPlan = (account: AccountPlanItem) => {
+    updateData((prev) => {
+      const idx = (prev.accountsPlan || []).findIndex((a) => a.id === account.id);
+      let nextAccounts = [...(prev.accountsPlan || [])];
+      if (idx >= 0) {
+        nextAccounts[idx] = account;
+      } else {
+        nextAccounts = [...nextAccounts, account];
+      }
+      // Atualiza o nome/grupo nos lançamentos já vinculados a esta conta
+      const nextEntries = (prev.financialEntries || []).map((e) =>
+        e.contaId === account.id
+          ? { ...e, contaNome: account.nome, grupo: account.grupo }
+          : e
+      );
+      return {
+        ...prev,
+        accountsPlan: nextAccounts,
+        financialEntries: nextEntries,
+      };
+    });
+    syncAccountPlanToSupabase(account);
+  };
+
+  const handleDeleteAccountPlan = (id: string) => {
+    updateData((prev) => ({
+      ...prev,
+      accountsPlan: (prev.accountsPlan || []).filter((a) => a.id !== id),
+    }));
+    deleteAccountPlanFromSupabase(id);
+  };
+
+  const handleRestoreDefaultAccounts = () => {
+    updateData((prev) => {
+      const existingIds = new Set((prev.accountsPlan || []).map((a) => a.id));
+      const missingDefaults = defaultAccountsPlan.filter((d) => !existingIds.has(d.id));
+      const merged = [...(prev.accountsPlan || []), ...missingDefaults];
+      missingDefaults.forEach((a) => syncAccountPlanToSupabase(a));
+      return {
+        ...prev,
+        accountsPlan: merged,
+      };
+    });
+    setSyncStatusMsg('Modelo padrão de Plano de Contas restaurado!');
+    setTimeout(() => setSyncStatusMsg(null), 3000);
+  };
+
+  const handleSaveFinancialCustomField = (field: FinancialCustomField) => {
+    updateData((prev) => {
+      const list = prev.financialCustomFields || defaultFinancialCustomFields;
+      const idx = list.findIndex((f) => f.id === field.id);
+      const nextFields = idx >= 0 ? list.map((f, i) => (i === idx ? field : f)) : [...list, field];
+      return {
+        ...prev,
+        financialCustomFields: nextFields,
+      };
+    });
+    syncFinancialCustomFieldToSupabase(field);
+  };
+
+  const handleDeleteFinancialCustomField = (id: string) => {
+    updateData((prev) => ({
+      ...prev,
+      financialCustomFields: (prev.financialCustomFields || []).filter((f) => f.id !== id),
+    }));
+    deleteFinancialCustomFieldFromSupabase(id);
+  };
+
   const navItems = [
     { id: 'inicio', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'lancamentos', label: 'Lançamentos', icon: Car },
-    { id: 'clientes', label: 'Clientes & Preços', icon: Users },
+    { id: 'clientes', label: 'Clientes', icon: Users },
     { id: 'servicos', label: 'Serviços', icon: Wrench },
     { id: 'metas', label: 'Metas', icon: Target },
-    { id: 'relatorios', label: 'Relatórios (PDF/Excel)', icon: FileText },
+    { id: 'financeiro', label: 'Financeiro', icon: Wallet },
+    { id: 'relatorios', label: 'Relatórios', icon: FileText },
   ];
 
   return (
@@ -719,11 +911,17 @@ export default function App() {
             launches={data.launches}
             clients={data.clients}
             services={data.services}
+            financialEntries={data.financialEntries}
+            accountsPlan={data.accountsPlan}
             onOpenLancamento={() => {
               setEditingLaunch(null);
               setIsLancamentoModalOpen(true);
             }}
             onNavigateTab={(tab) => setActiveTab(tab)}
+            onOpenFinanceiro={(subTab) => {
+              setFinanceiroInitialSubTab(subTab || 'movimentacoes');
+              setActiveTab('financeiro');
+            }}
             onOpenCompanyModal={() => {
               setIsFirstAccess(false);
               setIsCompanyModalOpen(true);
@@ -783,6 +981,24 @@ export default function App() {
             goals={data.goals}
             launches={data.launches}
             onSaveGoals={handleSaveGoals}
+          />
+        )}
+
+        {activeTab === 'financeiro' && (
+          <FinanceiroView
+            entries={data.financialEntries || []}
+            accountsPlan={data.accountsPlan || defaultAccountsPlan}
+            customFields={data.financialCustomFields || defaultFinancialCustomFields}
+            initialSubTab={financeiroInitialSubTab}
+            onSaveEntry={handleSaveFinancialEntry}
+            onSaveEntriesBatch={handleSaveFinancialEntriesBatch}
+            onDeleteEntry={handleDeleteFinancialEntry}
+            onDeleteEntriesBatch={handleDeleteFinancialEntriesBatch}
+            onSaveAccount={handleSaveAccountPlan}
+            onDeleteAccount={handleDeleteAccountPlan}
+            onRestoreDefaultAccounts={handleRestoreDefaultAccounts}
+            onSaveCustomField={handleSaveFinancialCustomField}
+            onDeleteCustomField={handleDeleteFinancialCustomField}
           />
         )}
 
@@ -906,12 +1122,12 @@ export default function App() {
         <button
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg text-[10px] transition-colors ${
-            mobileMenuOpen || ['servicos', 'metas', 'relatorios'].includes(activeTab)
+            mobileMenuOpen || ['servicos', 'metas', 'financeiro', 'relatorios'].includes(activeTab)
               ? 'text-neutral-950 font-bold'
               : 'text-neutral-500'
           }`}
         >
-          <MoreHorizontal className={`w-5 h-5 mb-0.5 ${mobileMenuOpen || ['servicos', 'metas', 'relatorios'].includes(activeTab) ? 'text-neutral-950' : 'text-neutral-400'}`} />
+          <MoreHorizontal className={`w-5 h-5 mb-0.5 ${mobileMenuOpen || ['servicos', 'metas', 'financeiro', 'relatorios'].includes(activeTab) ? 'text-neutral-950' : 'text-neutral-400'}`} />
           <span>Mais</span>
         </button>
       </nav>
