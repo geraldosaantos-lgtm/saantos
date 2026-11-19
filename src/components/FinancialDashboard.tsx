@@ -107,12 +107,14 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
     }, 0);
   }, [launches, period, todayStr, currentMonthPrefix, prevMonthPrefix, currentYearPrefix, weekStart, weekEnd]);
 
-  // KPIs Financeiros
+  // KPIs Financeiros (Transferências entre contas NÃO entram como Receita nem Despesa)
   const metrics = useMemo(() => {
     let totalReceitas = 0;
     let qtdReceitas = 0;
     let totalDespesas = 0;
     let qtdDespesas = 0;
+    let totalTransferencias = 0;
+    let qtdTransferencias = 0;
     let conciliados = 0;
     let pendentes = 0;
 
@@ -122,12 +124,24 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
 
     filteredEntries.forEach((e) => {
       const val = Math.abs(Number(e.valor) || 0);
-      const contaLabel = e.contaNome || (e.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS');
+      const contaLabel =
+        e.contaNome ||
+        (e.tipo === 'receita'
+          ? 'OUTRAS RECEITAS'
+          : e.tipo === 'transferencia'
+          ? 'TRANSFERÊNCIA ENTRE CONTAS'
+          : 'OUTRAS DESPESAS');
       const grupoLabel = e.grupo || 'GERAL';
       const bancoLabel = e.banco || 'CAIXA';
 
       if (e.status === 'Pendente') pendentes += 1;
       else conciliados += 1;
+
+      if (e.tipo === 'transferencia') {
+        totalTransferencias += val;
+        qtdTransferencias += 1;
+        return;
+      }
 
       const bCurr = bankStats.get(bancoLabel) || { banco: bancoLabel, receitas: 0, despesas: 0 };
 
@@ -160,6 +174,8 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
       qtdReceitas,
       totalDespesas,
       qtdDespesas,
+      totalTransferencias,
+      qtdTransferencias,
       saldoLiquido,
       margem,
       conciliados,
@@ -170,7 +186,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
     };
   }, [filteredEntries]);
 
-  // Saldos reais consolidados por Conta Bancária cadastrada + movimentação do período
+  // Saldos reais consolidados por Conta Bancária cadastrada + movimentação do período (inclui transferências entrada/saída)
   const bankSummaries = useMemo(() => {
     const items = bankAccounts.map((bank) => {
       let allEntradas = 0;
@@ -178,22 +194,37 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
       let periodEntradas = 0;
       let periodSaidas = 0;
 
-      const matchEntry = (e: FinancialEntry) =>
+      const bankUpper = bank.nome.trim().toUpperCase();
+      const matchOrigin = (e: FinancialEntry) =>
         e.bancoId === bank.id ||
-        (!e.bancoId && (e.banco || '').trim().toUpperCase() === bank.nome.trim().toUpperCase());
+        (!e.bancoId && (e.banco || '').trim().toUpperCase() === bankUpper);
+      const matchDest = (e: FinancialEntry) =>
+        e.tipo === 'transferencia' &&
+        (e.bancoDestinoId === bank.id ||
+          (!e.bancoDestinoId && (e.bancoDestino || '').trim().toUpperCase() === bankUpper));
 
       entries.forEach((e) => {
-        if (!matchEntry(e)) return;
         if (bank.dataSaldoInicial && e.data && e.data < bank.dataSaldoInicial) return;
         if (e.status === 'Pendente') return;
         const val = Math.abs(Number(e.valor) || 0);
+        if (e.tipo === 'transferencia') {
+          if (matchOrigin(e)) allSaidas += val;
+          if (matchDest(e)) allEntradas += val;
+          return;
+        }
+        if (!matchOrigin(e)) return;
         if (e.tipo === 'receita') allEntradas += val;
         else allSaidas += val;
       });
 
       filteredEntries.forEach((e) => {
-        if (!matchEntry(e)) return;
         const val = Math.abs(Number(e.valor) || 0);
+        if (e.tipo === 'transferencia') {
+          if (matchOrigin(e)) periodSaidas += val;
+          if (matchDest(e)) periodEntradas += val;
+          return;
+        }
+        if (!matchOrigin(e)) return;
         if (e.tipo === 'receita') periodEntradas += val;
         else periodSaidas += val;
       });
@@ -220,7 +251,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
     return { items, unregistered };
   }, [bankAccounts, entries, filteredEntries, metrics.banks]);
 
-  // Série do Gráfico de Fluxo de Caixa (Mensal: últimos 6 meses ou Diário: últimos 14 dias)
+  // Série do Gráfico de Fluxo de Caixa (Mensal: últimos 6 meses ou Diário: últimos 14 dias — exclui transferências)
   const chartSeries = useMemo(() => {
     if (chartMode === 'mensal') {
       const months: Array<{
@@ -243,6 +274,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
         });
       }
       entries.forEach((e) => {
+        if (e.tipo === 'transferencia') return;
         const prefix = (e.data || '').slice(0, 7);
         const bucket = months.find((m) => m.key === prefix);
         if (bucket) {
@@ -272,6 +304,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
         });
       }
       entries.forEach((e) => {
+        if (e.tipo === 'transferencia') return;
         const bucket = days.find((d) => d.key === e.data);
         if (bucket) {
           if (e.tipo === 'receita') bucket.receitas += Math.abs(e.valor);
@@ -441,9 +474,12 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
           <div className="text-lg sm:text-2xl font-black font-mono tabular-nums text-neutral-950 truncate">
             {metrics.conciliados} <span className="text-xs font-normal text-neutral-400">conciliados</span>
           </div>
-          <div className="text-[10px] sm:text-[11px] text-neutral-500 pt-1 border-t border-neutral-100 flex items-center justify-between">
-            <span>{metrics.pendentes} pendentes</span>
-            <span>{accountsPlan.filter((a) => a.ativo).length} contas ativas</span>
+          <div className="text-[10px] sm:text-[11px] text-neutral-500 pt-1 border-t border-neutral-100 flex items-center justify-between gap-1">
+            <span>
+              {metrics.pendentes} pend.
+              {metrics.qtdTransferencias > 0 ? ` · ${metrics.qtdTransferencias} transf.` : ''}
+            </span>
+            <span>{accountsPlan.filter((a) => a.ativo).length} contas</span>
           </div>
         </div>
       </div>
@@ -794,15 +830,21 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                       <span className="font-bold text-neutral-900 truncate">{e.descricao}</span>
                       <span
                         className={`font-mono font-bold shrink-0 ${
-                          e.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                          e.tipo === 'receita'
+                            ? 'text-emerald-700'
+                            : e.tipo === 'transferencia'
+                            ? 'text-blue-700'
+                            : 'text-rose-700'
                         }`}
                       >
-                        {e.tipo === 'receita' ? '+' : '-'}
+                        {e.tipo === 'receita' ? '+' : e.tipo === 'transferencia' ? '⇄ ' : '-'}
                         {formatCurrency(e.valor)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-neutral-500">
-                      <span className="truncate">{e.contaNome} · {e.banco}</span>
+                      <span className="truncate">
+                        {e.contaNome} · {e.tipo === 'transferencia' ? `${e.banco} → ${e.bancoDestino || '?'}` : e.banco}
+                      </span>
                       <span className="font-mono shrink-0">{e.data.split('-').reverse().join('/')}</span>
                     </div>
                   </div>
@@ -830,8 +872,10 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                         <td className="py-2 px-3 font-medium text-neutral-900 max-w-[200px] truncate">
                           {e.descricao}
                         </td>
-                        <td className="py-2 px-3 text-neutral-600 max-w-[160px] truncate">
-                          {e.contaNome}
+                        <td className="py-2 px-3 text-neutral-600 max-w-[180px] truncate">
+                          {e.tipo === 'transferencia'
+                            ? `${e.banco} → ${e.bancoDestino || '?'}`
+                            : e.contaNome}
                         </td>
                         <td className="py-2 px-3">
                           {e.status === 'Conciliado' ? (
@@ -846,10 +890,14 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                         </td>
                         <td
                           className={`py-2 px-3 text-right font-mono font-bold whitespace-nowrap ${
-                            e.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                            e.tipo === 'receita'
+                              ? 'text-emerald-700'
+                              : e.tipo === 'transferencia'
+                              ? 'text-blue-700'
+                              : 'text-rose-700'
                           }`}
                         >
-                          {e.tipo === 'receita' ? '+' : '-'}
+                          {e.tipo === 'receita' ? '+' : e.tipo === 'transferencia' ? '⇄ ' : '-'}
                           {formatCurrency(e.valor)}
                         </td>
                       </tr>

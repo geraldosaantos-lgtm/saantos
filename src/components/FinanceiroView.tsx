@@ -47,6 +47,7 @@ import {
   Copy,
   CreditCard,
   ArrowRight,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 interface FinanceiroViewProps {
@@ -139,7 +140,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
   // Filtros de Movimentações
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterTipo, setFilterTipo] = useState<'todos' | 'receita' | 'despesa'>('todos');
+  const [filterTipo, setFilterTipo] = useState<'todos' | 'receita' | 'despesa' | 'transferencia'>('todos');
   const [filterContaId, setFilterContaId] = useState<string>('todas');
   const [filterBanco, setFilterBanco] = useState<string>('todos');
   const [filterStatus, setFilterStatus] = useState<'todos' | 'Conciliado' | 'Pendente'>('todos');
@@ -186,6 +187,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   // Modal de Lançamento Financeiro (Novo / Editar Completo)
   const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<FinancialEntry | null>(null);
+  const [entryModalError, setEntryModalError] = useState<string | null>(null);
   const [entryForm, setEntryForm] = useState<Omit<FinancialEntry, 'id'>>({
     data: new Date().toISOString().slice(0, 10),
     descricao: '',
@@ -196,6 +198,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     valor: 0,
     banco: defaultActiveBank?.nome || 'SICREDI',
     bancoId: defaultActiveBank?.id || '',
+    bancoDestino: '',
+    bancoDestinoId: '',
     formaPagamento: 'PIX',
     documento: '',
     status: 'Conciliado',
@@ -227,7 +231,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
   // Plano de Contas (Totalmente Editável Inline na Tela + Import/Export)
   const planFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [planFilterTipo, setPlanFilterTipo] = useState<'todos' | 'receita' | 'despesa'>('todos');
+  const [planFilterTipo, setPlanFilterTipo] = useState<'todos' | 'receita' | 'despesa' | 'transferencia'>('todos');
   const [planSearch, setPlanSearch] = useState('');
   const [planDrafts, setPlanDrafts] = useState<Record<string, AccountPlanItem>>({});
   const [dirtyPlanIds, setDirtyPlanIds] = useState<string[]>([]);
@@ -319,16 +323,42 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     });
 
     entries.forEach((e) => {
-      const matchedBank =
+      const val = Math.abs(Number(e.valor) || 0);
+      const originBank =
         (e.bancoId ? bankAccounts.find((b) => b.id === e.bancoId) : undefined) ||
         bankAccounts.find((b) => b.nome.trim().toUpperCase() === (e.banco || '').trim().toUpperCase());
 
-      if (!matchedBank) return;
-      if (matchedBank.dataSaldoInicial && e.data && e.data < matchedBank.dataSaldoInicial) return;
+      if (e.tipo === 'transferencia') {
+        const destBank =
+          (e.bancoDestinoId ? bankAccounts.find((b) => b.id === e.bancoDestinoId) : undefined) ||
+          bankAccounts.find(
+            (b) => b.nome.trim().toUpperCase() === (e.bancoDestino || '').trim().toUpperCase()
+          );
 
-      const stat = map.get(matchedBank.id);
+        if (originBank && (!originBank.dataSaldoInicial || !e.data || e.data >= originBank.dataSaldoInicial)) {
+          const statOrig = map.get(originBank.id);
+          if (statOrig) {
+            statOrig.count += 1;
+            if (e.status === 'Pendente') statOrig.saidasPendentes += val;
+            else statOrig.saidasConciliadas += val;
+          }
+        }
+        if (destBank && (!destBank.dataSaldoInicial || !e.data || e.data >= destBank.dataSaldoInicial)) {
+          const statDest = map.get(destBank.id);
+          if (statDest) {
+            statDest.count += 1;
+            if (e.status === 'Pendente') statDest.entradasPendentes += val;
+            else statDest.entradasConciliadas += val;
+          }
+        }
+        return;
+      }
+
+      if (!originBank) return;
+      if (originBank.dataSaldoInicial && e.data && e.data < originBank.dataSaldoInicial) return;
+
+      const stat = map.get(originBank.id);
       if (!stat) return;
-      const val = Math.abs(Number(e.valor) || 0);
       stat.count += 1;
 
       if (e.status === 'Pendente') {
@@ -391,15 +421,23 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
           if (filterBanco.startsWith('bank:')) {
             const targetId = filterBanco.slice(5);
             const targetBank = bankAccounts.find((b) => b.id === targetId);
-            const matchById = e.bancoId === targetId;
-            const matchByName =
-              targetBank &&
-              !e.bancoId &&
-              (e.banco || '').trim().toUpperCase() === targetBank.nome.trim().toUpperCase();
-            if (!matchById && !matchByName) return false;
+            const targetUpper = targetBank ? targetBank.nome.trim().toUpperCase() : '';
+            const matchOrigin =
+              e.bancoId === targetId ||
+              (targetBank && !e.bancoId && (e.banco || '').trim().toUpperCase() === targetUpper);
+            const matchDest =
+              e.tipo === 'transferencia' &&
+              (e.bancoDestinoId === targetId ||
+                (targetBank &&
+                  !e.bancoDestinoId &&
+                  (e.bancoDestino || '').trim().toUpperCase() === targetUpper));
+            if (!matchOrigin && !matchDest) return false;
           } else if (filterBanco.startsWith('name:')) {
             const targetName = filterBanco.slice(5);
-            if ((e.banco || '').trim().toUpperCase() !== targetName) return false;
+            const matchOrigin = (e.banco || '').trim().toUpperCase() === targetName;
+            const matchDest =
+              e.tipo === 'transferencia' && (e.bancoDestino || '').trim().toUpperCase() === targetName;
+            if (!matchOrigin && !matchDest) return false;
           }
         }
 
@@ -422,6 +460,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             e.contaNome.toLowerCase().includes(term) ||
             e.grupo.toLowerCase().includes(term) ||
             e.banco.toLowerCase().includes(term) ||
+            (e.bancoDestino || '').toLowerCase().includes(term) ||
             (e.documento || '').toLowerCase().includes(term) ||
             (e.observacoes || '').toLowerCase().includes(term) ||
             extrasStr.includes(term);
@@ -452,15 +491,18 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   const filteredSummary = useMemo(() => {
     let rec = 0;
     let desp = 0;
+    let transf = 0;
     let pendentes = 0;
     filteredEntries.forEach((e) => {
       if (e.tipo === 'receita') rec += Math.abs(e.valor);
+      else if (e.tipo === 'transferencia') transf += Math.abs(e.valor);
       else desp += Math.abs(e.valor);
       if (e.status === 'Pendente') pendentes += 1;
     });
     return {
       receitas: rec,
       despesas: desp,
+      transferencias: transf,
       saldo: rec - desp,
       pendentes,
     };
@@ -561,10 +603,16 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       presetBank ||
       bankAccounts.find((b) => b.id === selectedExtratoBankId) ||
       defaultActiveBank;
+    const otherBank =
+      defaultTipo === 'transferencia'
+        ? bankAccounts.find((b) => b.ativo && b.id !== chosenBank?.id) ||
+          bankAccounts.find((b) => b.id !== chosenBank?.id)
+        : undefined;
     setEditingEntry(null);
+    setEntryModalError(null);
     setEntryForm({
       data: new Date().toISOString().slice(0, 10),
-      descricao: '',
+      descricao: defaultTipo === 'transferencia' ? 'TRANSFERÊNCIA ENTRE CONTAS' : '',
       tipo: defaultTipo,
       contaId: firstAcc?.id || '',
       contaNome: firstAcc?.nome || '',
@@ -572,7 +620,14 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       valor: 0,
       banco: chosenBank?.nome || bankDefaultName || 'CAIXA',
       bancoId: chosenBank?.id || '',
-      formaPagamento: chosenBank?.tipoConta === 'Caixa Físico' ? 'DINHEIRO' : 'PIX',
+      bancoDestino: otherBank?.nome || '',
+      bancoDestinoId: otherBank?.id || '',
+      formaPagamento:
+        defaultTipo === 'transferencia'
+          ? 'TRANSFERÊNCIA'
+          : chosenBank?.tipoConta === 'Caixa Físico'
+          ? 'DINHEIRO'
+          : 'PIX',
       documento: '',
       status: 'Conciliado',
       origem: 'manual',
@@ -586,7 +641,13 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     const matchedBank =
       (entry.bancoId ? bankAccounts.find((b) => b.id === entry.bancoId) : undefined) ||
       bankAccounts.find((b) => b.nome.trim().toUpperCase() === (entry.banco || '').trim().toUpperCase());
+    const matchedDestBank =
+      (entry.bancoDestinoId ? bankAccounts.find((b) => b.id === entry.bancoDestinoId) : undefined) ||
+      bankAccounts.find(
+        (b) => b.nome.trim().toUpperCase() === (entry.bancoDestino || '').trim().toUpperCase()
+      );
     setEditingEntry(entry);
+    setEntryModalError(null);
     setEntryForm({
       data: entry.data,
       descricao: entry.descricao,
@@ -597,6 +658,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       valor: entry.valor,
       banco: matchedBank?.nome || entry.banco,
       bancoId: matchedBank?.id || entry.bancoId || '',
+      bancoDestino: matchedDestBank?.nome || entry.bancoDestino || '',
+      bancoDestinoId: matchedDestBank?.id || entry.bancoDestinoId || '',
       formaPagamento: entry.formaPagamento || 'PIX',
       documento: entry.documento || '',
       status: entry.status,
@@ -611,20 +674,53 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     e.preventDefault();
     if (!entryForm.descricao.trim()) return;
     const acc = accountsPlan.find((a) => a.id === entryForm.contaId);
+    const finalTipo: AccountPlanType = acc?.tipo || entryForm.tipo;
     const matchedBank =
       (entryForm.bancoId ? bankAccounts.find((b) => b.id === entryForm.bancoId) : undefined) ||
       bankAccounts.find((b) => b.nome.trim().toUpperCase() === (entryForm.banco || '').trim().toUpperCase());
+    const matchedDestBank =
+      (entryForm.bancoDestinoId ? bankAccounts.find((b) => b.id === entryForm.bancoDestinoId) : undefined) ||
+      bankAccounts.find(
+        (b) => b.nome.trim().toUpperCase() === (entryForm.bancoDestino || '').trim().toUpperCase()
+      );
+
+    const originName = (matchedBank?.nome || entryForm.banco || 'CAIXA').trim().toUpperCase();
+    const originId = matchedBank?.id || entryForm.bancoId || '';
+    const destName = (matchedDestBank?.nome || entryForm.bancoDestino || '').trim().toUpperCase();
+    const destId = matchedDestBank?.id || entryForm.bancoDestinoId || '';
+
+    if (finalTipo === 'transferencia') {
+      if (!destName && !destId) {
+        setEntryModalError('Informe para qual conta bancária de destino o dinheiro vai.');
+        return;
+      }
+      if ((originId && destId && originId === destId) || (!originId && !destId && originName === destName) || originName === destName) {
+        setEntryModalError('A conta de destino deve ser diferente da conta de origem.');
+        return;
+      }
+    }
+
     const saved: FinancialEntry = {
       id: editingEntry ? editingEntry.id : `fin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       data: entryForm.data || todayStr,
       descricao: entryForm.descricao.trim().toUpperCase(),
-      tipo: entryForm.tipo,
+      tipo: finalTipo,
       contaId: acc?.id || entryForm.contaId || '',
-      contaNome: (acc?.nome || entryForm.contaNome || (entryForm.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS')).toUpperCase(),
+      contaNome: (
+        acc?.nome ||
+        entryForm.contaNome ||
+        (finalTipo === 'receita'
+          ? 'OUTRAS RECEITAS'
+          : finalTipo === 'transferencia'
+          ? 'TRANSFERÊNCIA ENTRE CONTAS'
+          : 'OUTRAS DESPESAS')
+      ).toUpperCase(),
       grupo: (acc?.grupo || entryForm.grupo || 'GERAL').toUpperCase(),
       valor: Math.abs(Number(entryForm.valor) || 0),
-      banco: (matchedBank?.nome || entryForm.banco || 'CAIXA').trim().toUpperCase(),
-      bancoId: matchedBank?.id || entryForm.bancoId || '',
+      banco: originName,
+      bancoId: originId,
+      bancoDestino: finalTipo === 'transferencia' ? destName : '',
+      bancoDestinoId: finalTipo === 'transferencia' ? destId : '',
       formaPagamento: (entryForm.formaPagamento || '').trim().toUpperCase(),
       documento: (entryForm.documento || '').trim().toUpperCase(),
       status: entryForm.status,
@@ -634,6 +730,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       criadoEm: editingEntry?.criadoEm || new Date().toISOString(),
     };
     onSaveEntry(saved);
+    setEntryModalError(null);
     setIsEntryModalOpen(false);
   };
 
@@ -642,10 +739,17 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     const matchedBank =
       (entry.bancoId ? bankAccounts.find((b) => b.id === entry.bancoId) : undefined) ||
       bankAccounts.find((b) => b.nome.trim().toUpperCase() === (entry.banco || '').trim().toUpperCase());
+    const matchedDestBank =
+      (entry.bancoDestinoId ? bankAccounts.find((b) => b.id === entry.bancoDestinoId) : undefined) ||
+      bankAccounts.find(
+        (b) => b.nome.trim().toUpperCase() === (entry.bancoDestino || '').trim().toUpperCase()
+      );
     setInlineEditId(entry.id);
     setInlineDraft({
       ...entry,
       bancoId: matchedBank?.id || entry.bancoId || '',
+      bancoDestino: matchedDestBank?.nome || entry.bancoDestino || '',
+      bancoDestinoId: matchedDestBank?.id || entry.bancoDestinoId || '',
       camposExtras: { ...(entry.camposExtras || {}) },
     });
   };
@@ -653,17 +757,48 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   const saveInlineEdit = () => {
     if (!inlineDraft) return;
     const acc = accountsPlan.find((a) => a.id === inlineDraft.contaId);
+    const finalTipo: AccountPlanType = acc?.tipo || inlineDraft.tipo;
     const matchedBank =
       (inlineDraft.bancoId ? bankAccounts.find((b) => b.id === inlineDraft.bancoId) : undefined) ||
       bankAccounts.find((b) => b.nome.trim().toUpperCase() === (inlineDraft.banco || '').trim().toUpperCase());
+    const matchedDestBank =
+      (inlineDraft.bancoDestinoId ? bankAccounts.find((b) => b.id === inlineDraft.bancoDestinoId) : undefined) ||
+      bankAccounts.find(
+        (b) => b.nome.trim().toUpperCase() === (inlineDraft.bancoDestino || '').trim().toUpperCase()
+      );
+    const originName = (matchedBank?.nome || inlineDraft.banco || 'CAIXA').trim().toUpperCase();
+    const originId = matchedBank?.id || inlineDraft.bancoId || '';
+    const destName = (matchedDestBank?.nome || inlineDraft.bancoDestino || '').trim().toUpperCase();
+    const destId = matchedDestBank?.id || inlineDraft.bancoDestinoId || '';
+
+    if (finalTipo === 'transferencia') {
+      if (!destName && !destId) {
+        setImportFeedback({
+          type: 'error',
+          msg: 'Na transferência, informe para qual conta bancária de destino o valor vai.',
+        });
+        return;
+      }
+      if ((originId && destId && originId === destId) || originName === destName) {
+        setImportFeedback({
+          type: 'error',
+          msg: 'A conta bancária de destino deve ser diferente da conta de origem.',
+        });
+        return;
+      }
+    }
+
     onSaveEntry({
       ...inlineDraft,
+      tipo: finalTipo,
       descricao: inlineDraft.descricao.trim().toUpperCase(),
       contaNome: (acc?.nome || inlineDraft.contaNome).toUpperCase(),
       grupo: (acc?.grupo || inlineDraft.grupo).toUpperCase(),
       valor: Math.abs(Number(inlineDraft.valor) || 0),
-      banco: (matchedBank?.nome || inlineDraft.banco || 'CAIXA').trim().toUpperCase(),
-      bancoId: matchedBank?.id || inlineDraft.bancoId || '',
+      banco: originName,
+      bancoId: originId,
+      bancoDestino: finalTipo === 'transferencia' ? destName : '',
+      bancoDestinoId: finalTipo === 'transferencia' ? destId : '',
       documento: (inlineDraft.documento || '').trim().toUpperCase(),
       observacoes: (inlineDraft.observacoes || '').trim().toUpperCase(),
     });
@@ -713,14 +848,33 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     setSelectedIds([]);
   };
 
+  const isStagingRowPending = (r: ParsedBankRow): boolean => {
+    if (!r.contaId) return true;
+    if (r.tipo === 'transferencia') {
+      const hasDest = Boolean(r.bancoDestinoId || (r.bancoDestino && r.bancoDestino.trim()));
+      const sameBank =
+        (Boolean(r.bancoId && r.bancoDestinoId) && r.bancoId === r.bancoDestinoId) ||
+        (Boolean(r.banco && r.bancoDestino) &&
+          r.banco.trim().toUpperCase() === r.bancoDestino!.trim().toUpperCase());
+      if (!hasDest || sameBank) return true;
+    }
+    return false;
+  };
+
   const stagingStats = useMemo(() => {
     let pendentes = 0;
     let totalReceitas = 0;
     let totalDespesas = 0;
+    let totalTransferencias = 0;
+    let qtdTransferencias = 0;
     stagingRows.forEach((r) => {
-      if (!r.contaId) pendentes += 1;
-      if (r.tipo === 'receita') totalReceitas += Math.abs(Number(r.valor) || 0);
-      else totalDespesas += Math.abs(Number(r.valor) || 0);
+      if (isStagingRowPending(r)) pendentes += 1;
+      const val = Math.abs(Number(r.valor) || 0);
+      if (r.tipo === 'receita') totalReceitas += val;
+      else if (r.tipo === 'transferencia') {
+        totalTransferencias += val;
+        qtdTransferencias += 1;
+      } else totalDespesas += val;
     });
     return {
       total: stagingRows.length,
@@ -728,12 +882,14 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       classificadas: stagingRows.length - pendentes,
       totalReceitas,
       totalDespesas,
+      totalTransferencias,
+      qtdTransferencias,
     };
   }, [stagingRows]);
 
   const visibleStagingRows = useMemo(() => {
-    if (stagingFilter === 'pendentes') return stagingRows.filter((r) => !r.contaId);
-    if (stagingFilter === 'classificadas') return stagingRows.filter((r) => Boolean(r.contaId));
+    if (stagingFilter === 'pendentes') return stagingRows.filter((r) => isStagingRowPending(r));
+    if (stagingFilter === 'classificadas') return stagingRows.filter((r) => !isStagingRowPending(r));
     return stagingRows;
   }, [stagingRows, stagingFilter]);
 
@@ -765,7 +921,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             bancoId: bankMatch?.id || '',
           };
         });
-        const pendingCount = withBank.filter((r) => !r.contaId).length;
+        const pendingCount = withBank.filter((r) => isStagingRowPending(r)).length;
         const classifiedCount = withBank.length - pendingCount;
         setStagingRows((prev) => [...prev, ...withBank]);
         setStagingFilter('todas');
@@ -773,7 +929,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
           type: 'success',
           msg:
             pendingCount > 0
-              ? `${withBank.length} linha(s) analisada(s) de "${file.name}": ${classifiedCount} com Plano de Contas sugerido e ${pendingCount} pendente(s) — informe em qual conta lançar abaixo.`
+              ? `${withBank.length} linha(s) analisada(s) de "${file.name}": ${classifiedCount} pronta(s) e ${pendingCount} aguardando Plano de Contas ou conta de destino.`
               : `${withBank.length} linha(s) analisada(s) de "${file.name}" e todas já identificadas com Plano de Contas! Revise abaixo antes de confirmar.`,
         });
       }
@@ -808,7 +964,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         banco: chosenBank?.nome || r.banco,
         bancoId: chosenBank?.id || '',
       }));
-      const pendingCount = withBank.filter((r) => !r.contaId).length;
+      const pendingCount = withBank.filter((r) => isStagingRowPending(r)).length;
       const classifiedCount = withBank.length - pendingCount;
       setStagingRows((prev) => [...prev, ...withBank]);
       setStagingFilter('todas');
@@ -817,7 +973,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         type: 'success',
         msg:
           pendingCount > 0
-            ? `${parsed.length} linha(s) analisada(s): ${classifiedCount} classificada(s) no Plano de Contas e ${pendingCount} aguardando sua seleção.`
+            ? `${parsed.length} linha(s) analisada(s): ${classifiedCount} pronta(s) e ${pendingCount} aguardando sua seleção.`
             : `${parsed.length} linha(s) analisada(s) e todas já vinculadas ao Plano de Contas! Revise antes de confirmar.`,
       });
     }
@@ -854,6 +1010,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         valor: 0,
         banco: (chosenBank?.nome || bankDefaultName || 'SICREDI').toUpperCase(),
         bancoId: chosenBank?.id || '',
+        bancoDestino: '',
+        bancoDestinoId: '',
         formaPagamento: 'PIX',
         documento: '',
         contaId: '',
@@ -902,7 +1060,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     if (stagingRows.length === 0) return;
     const next = reanalyzeStagingRows(stagingRows, accountsPlan, entries);
     setStagingRows(next);
-    const pendingCount = next.filter((r) => !r.contaId).length;
+    const pendingCount = next.filter((r) => isStagingRowPending(r)).length;
     setImportFeedback({
       type: 'success',
       msg:
@@ -931,9 +1089,27 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
               updated.grupo = acc.grupo;
               updated.tipo = acc.tipo;
               updated.analysisStatus = patch.analysisStatus || 'manual';
-              updated.analysisReason =
-                patch.analysisReason || `Informado (${acc.codigo} · ${acc.nome})`;
+              if (acc.tipo === 'transferencia') {
+                updated.formaPagamento = 'TRANSFERÊNCIA';
+                const hasDest = Boolean(updated.bancoDestinoId || updated.bancoDestino);
+                updated.analysisReason = hasDest
+                  ? `${updated.banco || 'ORIGEM'} → ${updated.bancoDestino || 'DESTINO'}`
+                  : 'Transferência: informe para qual conta bancária vai *';
+              } else {
+                updated.bancoDestino = '';
+                updated.bancoDestinoId = '';
+                updated.analysisReason =
+                  patch.analysisReason || `Informado (${acc.codigo} · ${acc.nome})`;
+              }
             }
+          }
+        }
+        if (patch.bancoDestinoId !== undefined || patch.bancoDestino !== undefined) {
+          if (updated.tipo === 'transferencia') {
+            const hasDest = Boolean(updated.bancoDestinoId || updated.bancoDestino);
+            updated.analysisReason = hasDest
+              ? `${updated.banco || 'ORIGEM'} → ${updated.bancoDestino || 'DESTINO'}`
+              : 'Transferência: informe para qual conta bancária vai *';
           }
         }
         return updated;
@@ -954,8 +1130,12 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
           contaNome: acc.nome,
           grupo: acc.grupo,
           tipo: acc.tipo,
+          formaPagamento: acc.tipo === 'transferencia' ? 'TRANSFERÊNCIA' : row.formaPagamento,
           analysisStatus: 'manual',
-          analysisReason: `Aplicado em lote (${acc.codigo} · ${acc.nome})`,
+          analysisReason:
+            acc.tipo === 'transferencia'
+              ? 'Transferência: informe para qual conta bancária vai *'
+              : `Aplicado em lote (${acc.codigo} · ${acc.nome})`,
         };
       })
     );
@@ -976,22 +1156,65 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       return;
     }
 
+    const missingTransferDest = valid.filter((r) => {
+      const acc = accountsPlan.find((a) => a.id === r.contaId);
+      const tipo = acc?.tipo || r.tipo;
+      if (tipo !== 'transferencia') return false;
+      const hasDest = Boolean(r.bancoDestinoId || (r.bancoDestino && r.bancoDestino.trim()));
+      const sameBank =
+        (Boolean(r.bancoId && r.bancoDestinoId) && r.bancoId === r.bancoDestinoId) ||
+        (Boolean(r.banco && r.bancoDestino) &&
+          r.banco.trim().toUpperCase() === r.bancoDestino!.trim().toUpperCase());
+      return !hasDest || sameBank;
+    });
+
+    if (missingTransferDest.length > 0) {
+      setStagingFilter('pendentes');
+      setImportFeedback({
+        type: 'error',
+        msg: `Há ${missingTransferDest.length} transferência(s) sem conta bancária de destino válida (ou com origem igual ao destino). Informe para qual conta o dinheiro vai.`,
+      });
+      return;
+    }
+
     const toSave: FinancialEntry[] = valid.map((r, idx) => {
       const matchedAcc = accountsPlan.find((a) => a.id === r.contaId);
+      const finalTipo: AccountPlanType = matchedAcc?.tipo || r.tipo;
       const matchedBank =
         (r.bancoId ? bankAccounts.find((b) => b.id === r.bancoId) : undefined) ||
         bankAccounts.find((b) => b.nome.trim().toUpperCase() === (r.banco || '').trim().toUpperCase());
+      const matchedDestBank =
+        finalTipo === 'transferencia'
+          ? (r.bancoDestinoId ? bankAccounts.find((b) => b.id === r.bancoDestinoId) : undefined) ||
+            bankAccounts.find(
+              (b) => b.nome.trim().toUpperCase() === (r.bancoDestino || '').trim().toUpperCase()
+            )
+          : undefined;
       return {
         id: `fin-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         data: r.data || todayStr,
         descricao: (r.descricao || 'LANÇAMENTO EXTRATO').trim().toUpperCase(),
-        tipo: matchedAcc?.tipo || r.tipo,
+        tipo: finalTipo,
         contaId: r.contaId,
-        contaNome: (matchedAcc?.nome || r.contaNome || (r.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS')).toUpperCase(),
+        contaNome: (
+          matchedAcc?.nome ||
+          r.contaNome ||
+          (finalTipo === 'receita'
+            ? 'OUTRAS RECEITAS'
+            : finalTipo === 'transferencia'
+            ? 'TRANSFERÊNCIA ENTRE CONTAS'
+            : 'OUTRAS DESPESAS')
+        ).toUpperCase(),
         grupo: (matchedAcc?.grupo || r.grupo || 'GERAL').toUpperCase(),
         valor: Math.abs(Number(r.valor) || 0),
         banco: (matchedBank?.nome || r.banco || bankDefaultName || 'BANCO').trim().toUpperCase(),
         bancoId: matchedBank?.id || r.bancoId || '',
+        bancoDestino:
+          finalTipo === 'transferencia'
+            ? (matchedDestBank?.nome || r.bancoDestino || '').trim().toUpperCase()
+            : '',
+        bancoDestinoId:
+          finalTipo === 'transferencia' ? matchedDestBank?.id || r.bancoDestinoId || '' : '',
         formaPagamento: (r.formaPagamento || 'CONTA CORRENTE').toUpperCase(),
         documento: (r.documento || '').trim().toUpperCase(),
         status: r.status,
@@ -1078,7 +1301,18 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     e.preventDefault();
     if (!quickNewAccount.nome.trim()) return;
     const sameTypeCount = accountsPlan.filter((a) => a.tipo === quickNewAccount.tipo).length + 1;
-    const prefix = quickNewAccount.tipo === 'receita' ? '1' : '2';
+    const prefix =
+      quickNewAccount.tipo === 'receita'
+        ? '1'
+        : quickNewAccount.tipo === 'transferencia'
+        ? '3'
+        : '2';
+    const defaultGroup =
+      quickNewAccount.tipo === 'receita'
+        ? 'RECEITAS OPERACIONAIS'
+        : quickNewAccount.tipo === 'transferencia'
+        ? 'TRANSFERÊNCIAS BANCÁRIAS'
+        : 'DESPESAS OPERACIONAIS';
     const nextCode =
       quickNewAccount.codigo.trim().toUpperCase() ||
       `${prefix}.${String(sameTypeCount).padStart(2, '0')}`;
@@ -1086,10 +1320,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       codigo: nextCode,
       tipo: quickNewAccount.tipo,
-      grupo: (
-        quickNewAccount.grupo.trim() ||
-        (quickNewAccount.tipo === 'receita' ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS')
-      ).toUpperCase(),
+      grupo: (quickNewAccount.grupo.trim() || defaultGroup).toUpperCase(),
       nome: quickNewAccount.nome.trim().toUpperCase(),
       descricao: quickNewAccount.descricao.trim(),
       ativo: true,
@@ -1098,7 +1329,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     setQuickNewAccount({
       codigo: '',
       tipo: quickNewAccount.tipo,
-      grupo: quickNewAccount.tipo === 'receita' ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS',
+      grupo: defaultGroup,
       nome: '',
       descricao: '',
     });
@@ -1152,13 +1383,19 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
   const openNewAccountModal = (tipo: AccountPlanType = 'despesa') => {
     const sameTypeCount = accountsPlan.filter((a) => a.tipo === tipo).length + 1;
-    const prefix = tipo === 'receita' ? '1' : '2';
+    const prefix = tipo === 'receita' ? '1' : tipo === 'transferencia' ? '3' : '2';
+    const defaultGroup =
+      tipo === 'receita'
+        ? 'RECEITAS OPERACIONAIS'
+        : tipo === 'transferencia'
+        ? 'TRANSFERÊNCIAS BANCÁRIAS'
+        : 'DESPESAS OPERACIONAIS';
     setEditingAccount(null);
     setAccountForm({
       codigo: `${prefix}.${String(sameTypeCount).padStart(2, '0')}`,
       nome: '',
       tipo,
-      grupo: tipo === 'receita' ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS',
+      grupo: defaultGroup,
       descricao: '',
       ativo: true,
     });
@@ -1240,6 +1477,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       'DESPESAS COM PESSOAL',
       'DESPESAS BANCÁRIAS',
       'IMPOSTOS E TAXAS',
+      'TRANSFERÊNCIAS BANCÁRIAS',
       'INVESTIMENTOS',
     ]);
     accountsPlan.forEach((a) => {
@@ -1451,6 +1689,11 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
               >
                 {formatCurrency(filteredSummary.saldo)}
               </span>
+              {filteredSummary.transferencias > 0 && (
+                <span className="text-[10px] font-mono font-semibold text-blue-700 block mt-0.5">
+                  ⇄ Transf. (fora DRE): {formatCurrency(filteredSummary.transferencias)}
+                </span>
+              )}
             </div>
             <div className="bg-white border border-neutral-200 rounded-xl p-3.5 shadow-2xs">
               <span className="text-[10px] font-bold uppercase text-neutral-500 block">Itens Pendentes</span>
@@ -1489,6 +1732,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 <option value="todos">Todos os Tipos</option>
                 <option value="receita">Apenas Receitas</option>
                 <option value="despesa">Apenas Despesas</option>
+                <option value="transferencia">Apenas Transferências</option>
               </select>
 
               {/* Conta do Plano */}
@@ -1578,7 +1822,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 </div>
               )}
 
-              <div className="flex items-center gap-2 ml-auto">
+              <div className="flex flex-wrap items-center gap-2 ml-auto">
                 <button
                   onClick={() => exportFinancialEntriesToExcel(filteredEntries, customFields)}
                   disabled={filteredEntries.length === 0}
@@ -1599,6 +1843,13 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 >
                   <Plus className="w-3.5 h-3.5" /> Despesa
                 </button>
+                <button
+                  onClick={() => openNewEntryModal('transferencia')}
+                  className="px-3 py-1.5 text-xs font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg flex items-center gap-1 transition-colors"
+                  title="Transferir saldo entre contas bancárias sem alterar Receitas/Despesas"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" /> Transferência
+                </button>
               </div>
             </div>
           </div>
@@ -1618,7 +1869,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   <option value="">-- Reclassificar Conta em Massa --</option>
                   {accountsPlan.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.tipo === 'receita' ? '[REC]' : '[DESP]'} {a.codigo} · {a.nome}
+                      {a.tipo === 'receita' ? '[REC]' : a.tipo === 'transferencia' ? '[TRANSF]' : '[DESP]'} {a.codigo} · {a.nome}
                     </option>
                   ))}
                 </select>
@@ -1663,16 +1914,23 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     <div className="min-w-0">
                       <span className="font-bold text-neutral-950 block truncate">{entry.descricao}</span>
                       <span className="text-[11px] text-neutral-500 block truncate">
-                        {entry.contaNome} · {entry.banco}
+                        {entry.contaNome} ·{' '}
+                        {entry.tipo === 'transferencia'
+                          ? `${entry.banco} → ${entry.bancoDestino || 'DESTINO NÃO INFORMADO'}`
+                          : entry.banco}
                       </span>
                     </div>
                   </div>
                   <span
                     className={`font-mono font-black shrink-0 ${
-                      entry.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                      entry.tipo === 'receita'
+                        ? 'text-emerald-700'
+                        : entry.tipo === 'transferencia'
+                        ? 'text-blue-700'
+                        : 'text-rose-700'
                     }`}
                   >
-                    {entry.tipo === 'receita' ? '+' : '-'}
+                    {entry.tipo === 'receita' ? '+' : entry.tipo === 'transferencia' ? '⇄ ' : '-'}
                     {formatCurrency(entry.valor)}
                   </span>
                 </div>
@@ -1766,18 +2024,32 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                             onChange={(e) => {
                               const nextTipo = e.target.value as AccountPlanType;
                               const nextAcc = accountsPlan.find((a) => a.tipo === nextTipo && a.ativo);
+                              const nextDest =
+                                nextTipo === 'transferencia' && !inlineDraft.bancoDestinoId
+                                  ? bankAccounts.find((b) => b.ativo && b.id !== inlineDraft.bancoId) ||
+                                    bankAccounts.find((b) => b.id !== inlineDraft.bancoId)
+                                  : undefined;
                               setInlineDraft({
                                 ...inlineDraft,
                                 tipo: nextTipo,
                                 contaId: nextAcc?.id || '',
                                 contaNome: nextAcc?.nome || '',
                                 grupo: nextAcc?.grupo || '',
+                                bancoDestino:
+                                  nextTipo === 'transferencia'
+                                    ? inlineDraft.bancoDestino || nextDest?.nome || ''
+                                    : '',
+                                bancoDestinoId:
+                                  nextTipo === 'transferencia'
+                                    ? inlineDraft.bancoDestinoId || nextDest?.id || ''
+                                    : '',
                               });
                             }}
                             className="px-2 py-1 border border-blue-300 rounded text-xs bg-white font-semibold"
                           >
                             <option value="receita">Receita</option>
                             <option value="despesa">Despesa</option>
+                            <option value="transferencia">Transferência</option>
                           </select>
                         </td>
                         <td className="py-2 px-2">
@@ -1793,12 +2065,26 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                             value={inlineDraft.contaId}
                             onChange={(e) => {
                               const acc = accountsPlan.find((a) => a.id === e.target.value);
+                              const nextTipo = acc?.tipo || inlineDraft.tipo;
+                              const nextDest =
+                                nextTipo === 'transferencia' && !inlineDraft.bancoDestinoId
+                                  ? bankAccounts.find((b) => b.ativo && b.id !== inlineDraft.bancoId) ||
+                                    bankAccounts.find((b) => b.id !== inlineDraft.bancoId)
+                                  : undefined;
                               setInlineDraft({
                                 ...inlineDraft,
                                 contaId: e.target.value,
                                 contaNome: acc?.nome || inlineDraft.contaNome,
                                 grupo: acc?.grupo || inlineDraft.grupo,
-                                tipo: acc?.tipo || inlineDraft.tipo,
+                                tipo: nextTipo,
+                                bancoDestino:
+                                  nextTipo === 'transferencia'
+                                    ? inlineDraft.bancoDestino || nextDest?.nome || ''
+                                    : '',
+                                bancoDestinoId:
+                                  nextTipo === 'transferencia'
+                                    ? inlineDraft.bancoDestinoId || nextDest?.id || ''
+                                    : '',
                               });
                             }}
                             className="w-full min-w-[150px] px-2 py-1 border border-blue-300 rounded text-xs bg-white"
@@ -1806,12 +2092,12 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                             <option value="">-- Selecione --</option>
                             {accountsPlan.map((a) => (
                               <option key={a.id} value={a.id}>
-                                {a.codigo} · {a.nome}
+                                {a.tipo === 'receita' ? '[REC]' : a.tipo === 'transferencia' ? '[TRANSF]' : '[DESP]'} {a.codigo} · {a.nome}
                               </option>
                             ))}
                           </select>
                         </td>
-                        <td className="py-2 px-2">
+                        <td className="py-2 px-2 space-y-1">
                           <select
                             value={inlineDraft.bancoId || ''}
                             onChange={(e) => {
@@ -1822,17 +2108,40 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                                 banco: b ? b.nome : inlineDraft.banco,
                               });
                             }}
-                            className="w-32 px-2 py-1 border border-blue-300 rounded text-xs bg-white uppercase font-medium"
+                            className="w-36 px-2 py-1 border border-blue-300 rounded text-xs bg-white uppercase font-medium"
                           >
                             {!inlineDraft.bancoId && inlineDraft.banco && (
                               <option value="">{inlineDraft.banco}</option>
                             )}
                             {bankAccounts.map((b) => (
                               <option key={b.id} value={b.id}>
-                                {b.nome}
+                                {inlineDraft.tipo === 'transferencia' ? `Sai: ${b.nome}` : b.nome}
                               </option>
                             ))}
                           </select>
+                          {inlineDraft.tipo === 'transferencia' && (
+                            <select
+                              value={inlineDraft.bancoDestinoId || ''}
+                              onChange={(e) => {
+                                const b = bankAccounts.find((x) => x.id === e.target.value);
+                                setInlineDraft({
+                                  ...inlineDraft,
+                                  bancoDestinoId: b ? b.id : '',
+                                  bancoDestino: b ? b.nome : '',
+                                });
+                              }}
+                              className="w-36 px-2 py-1 border border-blue-500 rounded text-xs bg-blue-50 text-blue-900 uppercase font-semibold block"
+                            >
+                              <option value="">Vai para *...</option>
+                              {bankAccounts
+                                .filter((b) => b.id !== inlineDraft.bancoId)
+                                .map((b) => (
+                                  <option key={b.id} value={b.id}>
+                                    Vai: {b.nome}
+                                  </option>
+                                ))}
+                            </select>
+                          )}
                         </td>
                         {activeCustomFields.map((cf) => (
                           <td key={cf.id} className="py-2 px-2">
@@ -1917,10 +2226,18 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         <span
                           className={`text-[11px] font-bold uppercase ${
-                            entry.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                            entry.tipo === 'receita'
+                              ? 'text-emerald-700'
+                              : entry.tipo === 'transferencia'
+                              ? 'text-blue-700'
+                              : 'text-rose-700'
                           }`}
                         >
-                          {entry.tipo === 'receita' ? 'Receita' : 'Despesa'}
+                          {entry.tipo === 'receita'
+                            ? 'Receita'
+                            : entry.tipo === 'transferencia'
+                            ? 'Transferência'
+                            : 'Despesa'}
                         </span>
                       </td>
                       <td className="py-2.5 px-3">
@@ -1942,7 +2259,15 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         <span className="text-[10px] text-neutral-400 block truncate">{entry.grupo}</span>
                       </td>
                       <td className="py-2.5 px-3 text-neutral-600 whitespace-nowrap">
-                        <span className="font-medium text-neutral-800 block">{entry.banco}</span>
+                        {entry.tipo === 'transferencia' ? (
+                          <span className="font-semibold text-blue-800 flex items-center gap-1">
+                            <span>{entry.banco}</span>
+                            <ArrowRight className="w-3 h-3 text-blue-500 shrink-0" />
+                            <span>{entry.bancoDestino || 'DESTINO?'}</span>
+                          </span>
+                        ) : (
+                          <span className="font-medium text-neutral-800 block">{entry.banco}</span>
+                        )}
                         <span className="text-[10px] text-neutral-400">
                           {entry.formaPagamento || (entry.origem === 'extrato' ? 'EXTRATO' : 'MANUAL')}
                         </span>
@@ -1965,10 +2290,14 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                       </td>
                       <td
                         className={`py-2.5 px-3 text-right font-mono font-bold tabular-nums whitespace-nowrap ${
-                          entry.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                          entry.tipo === 'receita'
+                            ? 'text-emerald-700'
+                            : entry.tipo === 'transferencia'
+                            ? 'text-blue-700'
+                            : 'text-rose-700'
                         }`}
                       >
-                        {entry.tipo === 'receita' ? '+' : '-'}
+                        {entry.tipo === 'receita' ? '+' : entry.tipo === 'transferencia' ? '⇄ ' : '-'}
                         {formatCurrency(entry.valor)}
                       </td>
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
@@ -2056,7 +2385,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-[11px] font-semibold text-neutral-700">
-                      Conta Bancária de Destino *
+                      Conta Bancária do Extrato (Origem) *
                     </label>
                     <button
                       type="button"
@@ -2256,7 +2585,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     }`}
                   >
                     <span className="text-[10px] font-bold uppercase block">
-                      Sem Plano de Contas
+                      Pend. Conta / Destino
                     </span>
                     <span className="text-base font-black font-mono tabular-nums">
                       {stagingStats.pendentes === 0 ? '0 (Tudo pronto)' : `${stagingStats.pendentes} pendente(s)`}
@@ -2264,9 +2593,14 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   </div>
                   <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
                     <span className="text-[10px] font-bold uppercase text-neutral-500 block">Totais do Lote</span>
-                    <div className="font-mono font-bold tabular-nums text-[11px] flex items-center gap-2 mt-0.5">
+                    <div className="font-mono font-bold tabular-nums text-[11px] flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
                       <span className="text-emerald-700">+{formatCurrency(stagingStats.totalReceitas)}</span>
                       <span className="text-rose-700">-{formatCurrency(stagingStats.totalDespesas)}</span>
+                      {stagingStats.qtdTransferencias > 0 && (
+                        <span className="text-blue-700">
+                          ⇄ {formatCurrency(stagingStats.totalTransferencias)} ({stagingStats.qtdTransferencias})
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2276,8 +2610,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   <div className="flex flex-wrap items-center gap-1 bg-neutral-200/70 p-1 rounded-lg">
                     {[
                       { id: 'todas', label: `Todas (${stagingStats.total})` },
-                      { id: 'pendentes', label: `Sem Conta (${stagingStats.pendentes})` },
-                      { id: 'classificadas', label: `Classificadas (${stagingStats.classificadas})` },
+                      { id: 'pendentes', label: `Pendentes (${stagingStats.pendentes})` },
+                      { id: 'classificadas', label: `Prontas (${stagingStats.classificadas})` },
                     ].map((f) => (
                       <button
                         key={f.id}
@@ -2299,12 +2633,17 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     <select
                       value={stagingBulkContaId}
                       onChange={(e) => setStagingBulkContaId(e.target.value)}
-                      className="px-2.5 py-1.5 border border-neutral-300 rounded-lg bg-white text-xs max-w-[240px]"
+                      className="px-2.5 py-1.5 border border-neutral-300 rounded-lg bg-white text-xs max-w-[260px]"
                     >
                       <option value="">-- Escolha uma conta --</option>
                       {accountsPlan.map((a) => (
                         <option key={a.id} value={a.id}>
-                          {a.tipo === 'receita' ? '[RECEITA]' : '[DESPESA]'} {a.codigo} · {a.nome}
+                          {a.tipo === 'receita'
+                            ? '[RECEITA]'
+                            : a.tipo === 'transferencia'
+                            ? '[TRANSFERÊNCIA]'
+                            : '[DESPESA]'}{' '}
+                          {a.codigo} · {a.nome}
                         </option>
                       ))}
                     </select>
@@ -2352,12 +2691,24 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   )}
                   {visibleStagingRows.map((row) => {
                     const isMissingAccount = !row.contaId;
+                    const sameOriginDest =
+                      row.tipo === 'transferencia' &&
+                      ((Boolean(row.bancoId && row.bancoDestinoId) && row.bancoId === row.bancoDestinoId) ||
+                        (Boolean(row.banco && row.bancoDestino) &&
+                          (row.banco || '').trim().toUpperCase() === (row.bancoDestino || '').trim().toUpperCase()));
+                    const isMissingDest =
+                      row.tipo === 'transferencia' &&
+                      (!(row.bancoDestinoId || (row.bancoDestino && row.bancoDestino.trim())) || sameOriginDest);
+                    const isRowPending = isMissingAccount || isMissingDest;
+
                     return (
                     <div
                       key={row.tempId}
                       className={`p-3 border rounded-xl space-y-2 text-xs ${
-                        isMissingAccount
+                        isRowPending
                           ? 'bg-amber-50/50 border-amber-300'
+                          : row.tipo === 'transferencia'
+                          ? 'bg-blue-50/30 border-blue-200'
                           : 'bg-neutral-50 border-neutral-200'
                       }`}
                     >
@@ -2378,18 +2729,27 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                               contaId: analysis.account?.id || '',
                               contaNome: analysis.account?.nome || '',
                               grupo: analysis.account?.grupo || '',
+                              formaPagamento: nextTipo === 'transferencia' ? 'TRANSFERÊNCIA' : row.formaPagamento,
+                              bancoDestino: nextTipo === 'transferencia' ? row.bancoDestino || '' : '',
+                              bancoDestinoId: nextTipo === 'transferencia' ? row.bancoDestinoId || '' : '',
                               analysisStatus: analysis.status,
-                              analysisReason: analysis.reason,
+                              analysisReason:
+                                nextTipo === 'transferencia' && !row.bancoDestinoId && !row.bancoDestino
+                                  ? 'Transferência: informe para qual conta bancária vai *'
+                                  : analysis.reason,
                             });
                           }}
                           className={`px-2 py-1 border rounded font-bold text-xs ${
                             row.tipo === 'receita'
                               ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                              : row.tipo === 'transferencia'
+                              ? 'border-blue-300 bg-blue-50 text-blue-800'
                               : 'border-rose-300 bg-rose-50 text-rose-800'
                           }`}
                         >
                           <option value="receita">Receita</option>
                           <option value="despesa">Despesa</option>
+                          <option value="transferencia">Transferência</option>
                         </select>
                         <button
                           onClick={() => setStagingRows((prev) => prev.filter((r) => r.tempId !== row.tempId))}
@@ -2418,13 +2778,16 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                             }`}
                           >
                             <option value="">-- Informe o Plano de Contas * --</option>
-                            {accountsPlan
-                              .filter((a) => a.tipo === row.tipo)
-                              .map((a) => (
-                                <option key={a.id} value={a.id}>
-                                  {a.codigo} · {a.nome}
-                                </option>
-                              ))}
+                            {accountsPlan.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.tipo === 'receita'
+                                  ? '[REC]'
+                                  : a.tipo === 'transferencia'
+                                  ? '[TRANSF]'
+                                  : '[DESP]'}{' '}
+                                {a.codigo} · {a.nome}
+                              </option>
+                            ))}
                           </select>
                           <input
                             type="number"
@@ -2436,53 +2799,105 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         </div>
                         <div
                           className={`text-[10px] flex items-center gap-1 ${
-                            isMissingAccount
+                            isRowPending
                               ? 'text-amber-800 font-semibold'
-                              : row.analysisStatus === 'historico'
+                              : row.tipo === 'transferencia' || row.analysisStatus === 'historico'
                               ? 'text-blue-700 font-medium'
                               : row.analysisStatus === 'regra' || row.analysisStatus === 'explicit'
                               ? 'text-emerald-700 font-medium'
                               : 'text-neutral-500'
                           }`}
                         >
-                          {isMissingAccount ? (
+                          {isRowPending ? (
                             <AlertCircle className="w-3 h-3 shrink-0" />
                           ) : (
                             <CheckCircle2 className="w-3 h-3 shrink-0" />
                           )}
                           <span className="truncate">
-                            {row.analysisReason || (isMissingAccount ? 'Selecione em qual conta lançar' : 'Plano de Contas informado')}
+                            {isMissingDest
+                              ? 'Informe para qual conta bancária o dinheiro vai *'
+                              : row.analysisReason || (isMissingAccount ? 'Selecione em qual conta lançar' : 'Plano de Contas informado')}
                           </span>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
-                        <select
-                          value={row.bancoId || ''}
-                          onChange={(e) => {
-                            const b = bankAccounts.find((x) => x.id === e.target.value);
-                            updateStagingRow(row.tempId, {
-                              bancoId: b ? b.id : '',
-                              banco: b ? b.nome : row.banco,
-                            });
-                          }}
-                          className="px-2 py-1 border border-neutral-300 rounded bg-white uppercase text-xs"
-                        >
-                          {!row.bancoId && <option value="">{row.banco || '-- Banco --'}</option>}
-                          {bankAccounts.map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.nome}
-                            </option>
-                          ))}
-                        </select>
+                        <div>
+                          {row.tipo === 'transferencia' && (
+                            <span className="text-[10px] font-bold text-neutral-500 block mb-0.5">
+                              Sai de (Origem)
+                            </span>
+                          )}
+                          <select
+                            value={row.bancoId || ''}
+                            onChange={(e) => {
+                              const b = bankAccounts.find((x) => x.id === e.target.value);
+                              updateStagingRow(row.tempId, {
+                                bancoId: b ? b.id : '',
+                                banco: b ? b.nome : row.banco,
+                              });
+                            }}
+                            className="w-full px-2 py-1 border border-neutral-300 rounded bg-white uppercase text-xs"
+                          >
+                            {!row.bancoId && <option value="">{row.banco || '-- Banco --'}</option>}
+                            {bankAccounts.map((b) => (
+                              <option key={b.id} value={b.id}>
+                                {b.nome}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {row.tipo === 'transferencia' ? (
+                          <div>
+                            <span className="text-[10px] font-bold text-blue-700 block mb-0.5">
+                              Vai para (Destino) *
+                            </span>
+                            <select
+                              value={row.bancoDestinoId || ''}
+                              onChange={(e) => {
+                                const b = bankAccounts.find((x) => x.id === e.target.value);
+                                updateStagingRow(row.tempId, {
+                                  bancoDestinoId: b ? b.id : '',
+                                  bancoDestino: b ? b.nome : '',
+                                });
+                              }}
+                              className={`w-full px-2 py-1 border rounded uppercase text-xs font-semibold ${
+                                isMissingDest
+                                  ? 'border-amber-500 bg-amber-50 text-amber-950'
+                                  : 'border-blue-300 bg-blue-50 text-blue-900'
+                              }`}
+                            >
+                              <option value="">-- Selecionar Destino * --</option>
+                              {bankAccounts
+                                .filter((b) => b.id !== row.bancoId)
+                                .map((b) => (
+                                  <option key={b.id} value={b.id}>
+                                    {b.nome}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            value={row.documento}
+                            placeholder="Documento"
+                            onChange={(e) => updateStagingRow(row.tempId, { documento: e.target.value.toUpperCase() })}
+                            className="px-2 py-1 border border-neutral-300 rounded bg-white uppercase"
+                          />
+                        )}
+                      </div>
+
+                      {row.tipo === 'transferencia' && (
                         <input
                           type="text"
                           value={row.documento}
-                          placeholder="Documento"
+                          placeholder="Documento (opcional)"
                           onChange={(e) => updateStagingRow(row.tempId, { documento: e.target.value.toUpperCase() })}
-                          className="px-2 py-1 border border-neutral-300 rounded bg-white uppercase"
+                          className="w-full px-2 py-1 border border-neutral-300 rounded bg-white uppercase"
                         />
-                      </div>
+                      )}
                     </div>
                   );
                   })}
@@ -2498,7 +2913,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         <th className="py-2 px-2 font-semibold">Descrição / Histórico</th>
                         <th className="py-2 px-2 font-semibold">Plano de Contas a Lançar *</th>
                         <th className="py-2 px-2 font-semibold">Valor (R$)</th>
-                        <th className="py-2 px-2 font-semibold">Banco</th>
+                        <th className="py-2 px-2 font-semibold">Banco (Origem / Destino)</th>
                         <th className="py-2 px-2 font-semibold">Documento</th>
                         {activeCustomFields.map((cf) => (
                           <th key={cf.id} className="py-2 px-2 font-semibold whitespace-nowrap">
@@ -2512,10 +2927,26 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     <tbody className="divide-y divide-neutral-200">
                       {visibleStagingRows.map((row) => {
                         const isMissingAccount = !row.contaId;
+                        const sameOriginDest =
+                          row.tipo === 'transferencia' &&
+                          ((Boolean(row.bancoId && row.bancoDestinoId) && row.bancoId === row.bancoDestinoId) ||
+                            (Boolean(row.banco && row.bancoDestino) &&
+                              (row.banco || '').trim().toUpperCase() === (row.bancoDestino || '').trim().toUpperCase()));
+                        const isMissingDest =
+                          row.tipo === 'transferencia' &&
+                          (!(row.bancoDestinoId || (row.bancoDestino && row.bancoDestino.trim())) || sameOriginDest);
+                        const isRowPending = isMissingAccount || isMissingDest;
+
                         return (
                         <tr
                           key={row.tempId}
-                          className={isMissingAccount ? 'bg-amber-50/50 hover:bg-amber-50/80' : 'hover:bg-neutral-50'}
+                          className={
+                            isRowPending
+                              ? 'bg-amber-50/50 hover:bg-amber-50/80'
+                              : row.tipo === 'transferencia'
+                              ? 'bg-blue-50/20 hover:bg-blue-50/40'
+                              : 'hover:bg-neutral-50'
+                          }
                         >
                           <td className="py-1.5 px-2">
                             <input
@@ -2536,18 +2967,27 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                                   contaId: analysis.account?.id || '',
                                   contaNome: analysis.account?.nome || '',
                                   grupo: analysis.account?.grupo || '',
+                                  formaPagamento: nextTipo === 'transferencia' ? 'TRANSFERÊNCIA' : row.formaPagamento,
+                                  bancoDestino: nextTipo === 'transferencia' ? row.bancoDestino || '' : '',
+                                  bancoDestinoId: nextTipo === 'transferencia' ? row.bancoDestinoId || '' : '',
                                   analysisStatus: analysis.status,
-                                  analysisReason: analysis.reason,
+                                  analysisReason:
+                                    nextTipo === 'transferencia' && !row.bancoDestinoId && !row.bancoDestino
+                                      ? 'Transferência: informe para qual conta bancária vai *'
+                                      : analysis.reason,
                                 });
                               }}
                               className={`px-2 py-1 border rounded text-xs font-bold ${
                                 row.tipo === 'receita'
                                   ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                  : row.tipo === 'transferencia'
+                                  ? 'border-blue-300 bg-blue-50 text-blue-800'
                                   : 'border-rose-300 bg-rose-50 text-rose-800'
                               }`}
                             >
                               <option value="receita">Receita</option>
                               <option value="despesa">Despesa</option>
+                              <option value="transferencia">Transferência</option>
                             </select>
                           </td>
                           <td className="py-1.5 px-2">
@@ -2575,28 +3015,35 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                               <option value="">-- Informe o Plano de Contas * --</option>
                               {accountsPlan.map((a) => (
                                 <option key={a.id} value={a.id}>
-                                  {a.tipo === 'receita' ? '[REC]' : '[DESP]'} {a.codigo} · {a.nome}
+                                  {a.tipo === 'receita'
+                                    ? '[REC]'
+                                    : a.tipo === 'transferencia'
+                                    ? '[TRANSF]'
+                                    : '[DESP]'}{' '}
+                                  {a.codigo} · {a.nome}
                                 </option>
                               ))}
                             </select>
                             <div
                               className={`mt-1 text-[10px] flex items-center gap-1 leading-tight ${
-                                isMissingAccount
+                                isRowPending
                                   ? 'text-amber-800 font-semibold'
-                                  : row.analysisStatus === 'historico'
+                                  : row.tipo === 'transferencia' || row.analysisStatus === 'historico'
                                   ? 'text-blue-700 font-medium'
                                   : row.analysisStatus === 'regra' || row.analysisStatus === 'explicit'
                                   ? 'text-emerald-700 font-medium'
                                   : 'text-neutral-500'
                               }`}
                             >
-                              {isMissingAccount ? (
+                              {isRowPending ? (
                                 <AlertCircle className="w-3 h-3 shrink-0" />
                               ) : (
                                 <CheckCircle2 className="w-3 h-3 shrink-0" />
                               )}
                               <span className="truncate max-w-[220px]" title={row.analysisReason || ''}>
-                                {row.analysisReason || (isMissingAccount ? 'Informe em qual conta lançar' : 'Conta informada')}
+                                {isMissingDest
+                                  ? 'Informe a conta bancária de destino →'
+                                  : row.analysisReason || (isMissingAccount ? 'Informe em qual conta lançar' : 'Conta informada')}
                               </span>
                             </div>
                           </td>
@@ -2611,7 +3058,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                               className="w-24 px-2 py-1 border border-neutral-300 rounded bg-white font-mono font-bold text-right"
                             />
                           </td>
-                          <td className="py-1.5 px-2">
+                          <td className="py-1.5 px-2 space-y-1 min-w-[165px]">
                             <select
                               value={row.bancoId || ''}
                               onChange={(e) => {
@@ -2621,15 +3068,41 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                                   banco: b ? b.nome : row.banco,
                                 });
                               }}
-                              className="w-32 px-2 py-1 border border-neutral-300 rounded bg-white uppercase text-xs"
+                              className="w-full px-2 py-1 border border-neutral-300 rounded bg-white uppercase text-xs"
                             >
                               {!row.bancoId && <option value="">{row.banco || '-- Banco --'}</option>}
                               {bankAccounts.map((b) => (
                                 <option key={b.id} value={b.id}>
-                                  {b.nome}
+                                  {row.tipo === 'transferencia' ? `Sai de: ${b.nome}` : b.nome}
                                 </option>
                               ))}
                             </select>
+                            {row.tipo === 'transferencia' && (
+                              <select
+                                value={row.bancoDestinoId || ''}
+                                onChange={(e) => {
+                                  const b = bankAccounts.find((x) => x.id === e.target.value);
+                                  updateStagingRow(row.tempId, {
+                                    bancoDestinoId: b ? b.id : '',
+                                    bancoDestino: b ? b.nome : '',
+                                  });
+                                }}
+                                className={`w-full px-2 py-1 border rounded uppercase text-xs font-semibold ${
+                                  isMissingDest
+                                    ? 'border-amber-500 bg-amber-50 text-amber-950'
+                                    : 'border-blue-400 bg-blue-50 text-blue-900'
+                                }`}
+                              >
+                                <option value="">→ Vai para qual banco? *</option>
+                                {bankAccounts
+                                  .filter((b) => b.id !== row.bancoId)
+                                  .map((b) => (
+                                    <option key={b.id} value={b.id}>
+                                      Vai para: {b.nome}
+                                    </option>
+                                  ))}
+                              </select>
+                            )}
                           </td>
                           <td className="py-1.5 px-2">
                             <input
@@ -3029,11 +3502,12 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center bg-neutral-100 p-1 rounded-xl">
+                <div className="flex flex-wrap items-center bg-neutral-100 p-1 rounded-xl">
                   {[
                     { id: 'todos', label: 'Todas' },
                     { id: 'receita', label: 'Receitas' },
                     { id: 'despesa', label: 'Despesas' },
+                    { id: 'transferencia', label: 'Transferências' },
                   ].map((t) => (
                     <button
                       key={t.id}
@@ -3100,6 +3574,13 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   className="px-3 py-2 text-xs font-bold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
                 >
                   <Plus className="w-3.5 h-3.5" /> Despesa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openNewAccountModal('transferencia')}
+                  className="px-3 py-2 text-xs font-bold text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" /> Transferência
                 </button>
               </div>
             </div>
@@ -3218,17 +3699,25 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   setQuickNewAccount({
                     ...quickNewAccount,
                     tipo: t,
-                    grupo: t === 'receita' ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS',
+                    grupo:
+                      t === 'receita'
+                        ? 'RECEITAS OPERACIONAIS'
+                        : t === 'transferencia'
+                        ? 'TRANSFERÊNCIAS BANCÁRIAS'
+                        : 'DESPESAS OPERACIONAIS',
                   });
                 }}
                 className={`lg:col-span-2 px-2.5 py-2 border rounded-xl font-bold focus:outline-none ${
                   quickNewAccount.tipo === 'receita'
                     ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                    : quickNewAccount.tipo === 'transferencia'
+                    ? 'border-blue-300 bg-blue-50 text-blue-800'
                     : 'border-rose-300 bg-rose-50 text-rose-800'
                 }`}
               >
                 <option value="receita">Receita</option>
                 <option value="despesa">Despesa</option>
+                <option value="transferencia">Transferência</option>
               </select>
               <input
                 type="text"
@@ -3305,16 +3794,23 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         className={`px-2 py-1 border rounded-lg font-bold ${
                           draft.tipo === 'receita'
                             ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                            : draft.tipo === 'transferencia'
+                            ? 'border-blue-300 bg-blue-50 text-blue-800'
                             : 'border-rose-300 bg-rose-50 text-rose-800'
                         }`}
                       >
                         <option value="receita">Receita</option>
                         <option value="despesa">Despesa</option>
+                        <option value="transferencia">Transferência</option>
                       </select>
                     </div>
                     <span
                       className={`font-mono font-bold tabular-nums ${
-                        draft.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                        draft.tipo === 'receita'
+                          ? 'text-emerald-700'
+                          : draft.tipo === 'transferencia'
+                          ? 'text-blue-700'
+                          : 'text-rose-700'
                       }`}
                     >
                       {formatCurrency(stats.total)}
@@ -3486,11 +3982,14 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                           className={`w-full px-2 py-1.5 border rounded-lg font-bold text-xs focus:outline-none ${
                             draft.tipo === 'receita'
                               ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                              : draft.tipo === 'transferencia'
+                              ? 'border-blue-300 bg-blue-50 text-blue-800'
                               : 'border-rose-300 bg-rose-50 text-rose-800'
                           }`}
                         >
                           <option value="receita">Receita</option>
                           <option value="despesa">Despesa</option>
+                          <option value="transferencia">Transferência</option>
                         </select>
                       </td>
 
@@ -3544,7 +4043,11 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                       <td className="py-2 px-3 text-right whitespace-nowrap">
                         <span
                           className={`font-mono font-bold tabular-nums block ${
-                            draft.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                            draft.tipo === 'receita'
+                              ? 'text-emerald-700'
+                              : draft.tipo === 'transferencia'
+                              ? 'text-blue-700'
+                              : 'text-rose-700'
                           }`}
                         >
                           {formatCurrency(stats.total)}
@@ -3654,6 +4157,22 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveEntryModal} className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1 text-xs">
+              {entryModalError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-center gap-2 font-semibold">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{entryModalError}</span>
+                </div>
+              )}
+
+              {entryForm.tipo === 'transferencia' && (
+                <div className="p-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 flex items-start gap-2">
+                  <ArrowRightLeft className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
+                  <span>
+                    <strong>Transferência entre contas:</strong> não entra como Receita nem como Despesa no resultado/DRE. O valor sai da conta de origem e entra na conta de destino, atualizando os dois saldos.
+                  </span>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block font-semibold text-neutral-700 mb-1">Tipo *</label>
@@ -3662,22 +4181,45 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     onChange={(e) => {
                       const nextTipo = e.target.value as AccountPlanType;
                       const nextAcc = accountsPlan.find((a) => a.tipo === nextTipo && a.ativo);
+                      const fallbackDest =
+                        nextTipo === 'transferencia' && !entryForm.bancoDestinoId
+                          ? bankAccounts.find((b) => b.ativo && b.id !== entryForm.bancoId) ||
+                            bankAccounts.find((b) => b.id !== entryForm.bancoId)
+                          : undefined;
+                      setEntryModalError(null);
                       setEntryForm({
                         ...entryForm,
                         tipo: nextTipo,
                         contaId: nextAcc?.id || '',
                         contaNome: nextAcc?.nome || '',
                         grupo: nextAcc?.grupo || '',
+                        descricao:
+                          nextTipo === 'transferencia' && !entryForm.descricao.trim()
+                            ? 'TRANSFERÊNCIA ENTRE CONTAS'
+                            : entryForm.descricao,
+                        formaPagamento:
+                          nextTipo === 'transferencia' ? 'TRANSFERÊNCIA' : entryForm.formaPagamento,
+                        bancoDestino:
+                          nextTipo === 'transferencia'
+                            ? entryForm.bancoDestino || fallbackDest?.nome || ''
+                            : '',
+                        bancoDestinoId:
+                          nextTipo === 'transferencia'
+                            ? entryForm.bancoDestinoId || fallbackDest?.id || ''
+                            : '',
                       });
                     }}
                     className={`w-full px-3 py-2 border rounded-xl font-bold focus:outline-none ${
                       entryForm.tipo === 'receita'
                         ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                        : entryForm.tipo === 'transferencia'
+                        ? 'border-blue-300 bg-blue-50 text-blue-800'
                         : 'border-rose-300 bg-rose-50 text-rose-800'
                     }`}
                   >
                     <option value="receita">Receita (Entrada)</option>
                     <option value="despesa">Despesa (Saída)</option>
+                    <option value="transferencia">Transferência (Entre Contas)</option>
                   </select>
                 </div>
 
@@ -3713,24 +4255,45 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   required
                   value={entryForm.descricao}
                   onChange={(e) => setEntryForm({ ...entryForm, descricao: e.target.value.toUpperCase() })}
-                  placeholder="EX: COMPRA DE SHAMPOO AUTOMOTIVO / RECEBIMENTO FROTA"
+                  placeholder={
+                    entryForm.tipo === 'transferencia'
+                      ? 'EX: TRANSFERÊNCIA DO CAIXA PARA SICREDI'
+                      : 'EX: COMPRA DE SHAMPOO AUTOMOTIVO / RECEBIMENTO FROTA'
+                  }
                   className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
+                <div className={entryForm.tipo === 'transferencia' ? 'sm:col-span-2' : ''}>
                   <label className="block font-semibold text-neutral-700 mb-1">Conta (Plano de Contas) *</label>
                   <select
                     value={entryForm.contaId}
                     onChange={(e) => {
                       const acc = accountsPlan.find((a) => a.id === e.target.value);
+                      const nextTipo = acc?.tipo || entryForm.tipo;
+                      const fallbackDest =
+                        nextTipo === 'transferencia' && !entryForm.bancoDestinoId
+                          ? bankAccounts.find((b) => b.ativo && b.id !== entryForm.bancoId) ||
+                            bankAccounts.find((b) => b.id !== entryForm.bancoId)
+                          : undefined;
+                      setEntryModalError(null);
                       setEntryForm({
                         ...entryForm,
                         contaId: e.target.value,
                         contaNome: acc?.nome || '',
                         grupo: acc?.grupo || '',
-                        tipo: acc?.tipo || entryForm.tipo,
+                        tipo: nextTipo,
+                        formaPagamento:
+                          nextTipo === 'transferencia' ? 'TRANSFERÊNCIA' : entryForm.formaPagamento,
+                        bancoDestino:
+                          nextTipo === 'transferencia'
+                            ? entryForm.bancoDestino || fallbackDest?.nome || ''
+                            : '',
+                        bancoDestinoId:
+                          nextTipo === 'transferencia'
+                            ? entryForm.bancoDestinoId || fallbackDest?.id || ''
+                            : '',
                       });
                     }}
                     className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white"
@@ -3748,7 +4311,11 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="font-semibold text-neutral-700">Banco / Conta *</label>
+                    <label className="font-semibold text-neutral-700">
+                      {entryForm.tipo === 'transferencia'
+                        ? 'Conta Bancária de Origem (Sai de) *'
+                        : 'Banco / Conta *'}
+                    </label>
                     <button
                       type="button"
                       onClick={() => openNewBankModal(true)}
@@ -3761,6 +4328,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     value={entryForm.bancoId || '__legacy__'}
                     onChange={(e) => {
                       const val = e.target.value;
+                      setEntryModalError(null);
                       if (val === '__legacy__') {
                         setEntryForm({ ...entryForm, bancoId: '', banco: '' });
                       } else {
@@ -3789,6 +4357,62 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     />
                   )}
                 </div>
+
+                {entryForm.tipo === 'transferencia' && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-semibold text-blue-800">
+                        Conta Bancária de Destino (Vai para) *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => openNewBankModal(false)}
+                        className="text-[11px] font-bold text-blue-700 hover:underline flex items-center gap-0.5"
+                      >
+                        <Plus className="w-3 h-3" /> Nova Conta
+                      </button>
+                    </div>
+                    <select
+                      value={entryForm.bancoDestinoId || (entryForm.bancoDestino ? '__legacy__' : '')}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setEntryModalError(null);
+                        if (val === '') {
+                          setEntryForm({ ...entryForm, bancoDestinoId: '', bancoDestino: '' });
+                        } else if (val === '__legacy__') {
+                          setEntryForm({ ...entryForm, bancoDestinoId: '', bancoDestino: '' });
+                        } else {
+                          const b = bankAccounts.find((x) => x.id === val);
+                          if (b) {
+                            setEntryForm({ ...entryForm, bancoDestinoId: b.id, bancoDestino: b.nome });
+                          }
+                        }
+                      }}
+                      className="w-full px-3 py-2 border border-blue-400 rounded-xl bg-blue-50 text-blue-950 uppercase font-semibold"
+                    >
+                      <option value="">-- Selecione a conta de destino * --</option>
+                      {bankAccounts
+                        .filter((b) => b.id !== entryForm.bancoId)
+                        .map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.nome} ({b.tipoConta})
+                          </option>
+                        ))}
+                      <option value="__legacy__">-- Outro (Digitar manualmente) --</option>
+                    </select>
+                    {!entryForm.bancoDestinoId && (
+                      <input
+                        type="text"
+                        value={entryForm.bancoDestino || ''}
+                        onChange={(e) =>
+                          setEntryForm({ ...entryForm, bancoDestino: e.target.value.toUpperCase() })
+                        }
+                        placeholder="DIGITE O BANCO DE DESTINO..."
+                        className="mt-2 w-full px-3 py-2 border border-blue-300 rounded-xl uppercase"
+                      />
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -3947,11 +4571,27 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                   <label className="block font-semibold text-neutral-700 mb-1">Tipo *</label>
                   <select
                     value={accountForm.tipo}
-                    onChange={(e) => setAccountForm({ ...accountForm, tipo: e.target.value as AccountPlanType })}
+                    onChange={(e) => {
+                      const nextTipo = e.target.value as AccountPlanType;
+                      const isDefaultGroup =
+                        !accountForm.grupo ||
+                        accountForm.grupo === 'RECEITAS OPERACIONAIS' ||
+                        accountForm.grupo === 'DESPESAS OPERACIONAIS' ||
+                        accountForm.grupo === 'TRANSFERÊNCIAS BANCÁRIAS';
+                      const nextGrupo = isDefaultGroup
+                        ? nextTipo === 'receita'
+                          ? 'RECEITAS OPERACIONAIS'
+                          : nextTipo === 'transferencia'
+                          ? 'TRANSFERÊNCIAS BANCÁRIAS'
+                          : 'DESPESAS OPERACIONAIS'
+                        : accountForm.grupo;
+                      setAccountForm({ ...accountForm, tipo: nextTipo, grupo: nextGrupo });
+                    }}
                     className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white font-semibold"
                   >
                     <option value="receita">Receita</option>
                     <option value="despesa">Despesa</option>
+                    <option value="transferencia">Transferência (Entre Contas)</option>
                   </select>
                 </div>
               </div>

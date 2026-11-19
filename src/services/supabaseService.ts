@@ -244,7 +244,12 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
           id: a.id,
           codigo: (a.codigo || '').toUpperCase(),
           nome: (a.nome || '').toUpperCase(),
-          tipo: a.tipo === 'receita' ? 'receita' : 'despesa',
+          tipo:
+            a.tipo === 'receita'
+              ? 'receita'
+              : a.tipo === 'transferencia'
+              ? 'transferencia'
+              : 'despesa',
           grupo: (a.grupo || 'GERAL').toUpperCase(),
           descricao: a.descricao || '',
           ativo: a.ativo !== false,
@@ -252,25 +257,36 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
       }
 
       if (!finRes.error && Array.isArray(finRes.data)) {
-        state.financialEntries = finRes.data.map((f: any) => ({
-          id: f.id,
-          data: f.data || new Date().toISOString().slice(0, 10),
-          descricao: (f.descricao || '').toUpperCase(),
-          tipo: f.tipo === 'receita' ? 'receita' : 'despesa',
-          contaId: f.conta_id || '',
-          contaNome: (f.conta_nome || '').toUpperCase(),
-          grupo: (f.grupo || '').toUpperCase(),
-          valor: Math.abs(Number(f.valor) || 0),
-          banco: (f.banco || 'CAIXA').toUpperCase(),
-          bancoId: f.banco_id || '',
-          formaPagamento: (f.forma_pagamento || '').toUpperCase(),
-          documento: (f.documento || '').toUpperCase(),
-          status: f.status === 'Pendente' ? 'Pendente' : 'Conciliado',
-          origem: f.origem || 'manual',
-          observacoes: (f.observacoes || '').toUpperCase(),
-          camposExtras: f.campos_extras && typeof f.campos_extras === 'object' ? f.campos_extras : {},
-          criadoEm: f.criado_em,
-        }));
+        state.financialEntries = finRes.data.map((f: any) => {
+          const rawExtras = f.campos_extras && typeof f.campos_extras === 'object' ? f.campos_extras : {};
+          const { _bancoDestino, _bancoDestinoId, ...cleanExtras } = rawExtras;
+          return {
+            id: f.id,
+            data: f.data || new Date().toISOString().slice(0, 10),
+            descricao: (f.descricao || '').toUpperCase(),
+            tipo:
+              f.tipo === 'receita'
+                ? 'receita'
+                : f.tipo === 'transferencia'
+                ? 'transferencia'
+                : 'despesa',
+            contaId: f.conta_id || '',
+            contaNome: (f.conta_nome || '').toUpperCase(),
+            grupo: (f.grupo || '').toUpperCase(),
+            valor: Math.abs(Number(f.valor) || 0),
+            banco: (f.banco || 'CAIXA').toUpperCase(),
+            bancoId: f.banco_id || '',
+            bancoDestino: (f.banco_destino || _bancoDestino || '').toUpperCase(),
+            bancoDestinoId: f.banco_destino_id || _bancoDestinoId || '',
+            formaPagamento: (f.forma_pagamento || '').toUpperCase(),
+            documento: (f.documento || '').toUpperCase(),
+            status: f.status === 'Pendente' ? 'Pendente' : 'Conciliado',
+            origem: f.origem || 'manual',
+            observacoes: (f.observacoes || '').toUpperCase(),
+            camposExtras: cleanExtras,
+            criadoEm: f.criado_em,
+          };
+        });
       }
 
       if (!cfRes.error && Array.isArray(cfRes.data) && cfRes.data.length > 0) {
@@ -621,6 +637,14 @@ export async function syncFinancialEntryToSupabase(entry: FinancialEntry): Promi
   const supabase = getSupabaseClient();
   if (!supabase) return false;
   try {
+    const destName = (entry.bancoDestino || '').trim().toUpperCase();
+    const destId = entry.bancoDestinoId || '';
+    const extrasPayload: Record<string, string> = {
+      ...(entry.camposExtras || {}),
+      ...(destName ? { _bancoDestino: destName } : {}),
+      ...(destId ? { _bancoDestinoId: destId } : {}),
+    };
+
     const basePayload = {
       id: entry.id,
       data: entry.data,
@@ -636,7 +660,7 @@ export async function syncFinancialEntryToSupabase(entry: FinancialEntry): Promi
       status: entry.status || 'Conciliado',
       origem: entry.origem || 'manual',
       observacoes: (entry.observacoes || '').toUpperCase(),
-      campos_extras: entry.camposExtras || {},
+      campos_extras: extrasPayload,
       criado_em: entry.criadoEm || new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -645,13 +669,31 @@ export async function syncFinancialEntryToSupabase(entry: FinancialEntry): Promi
       {
         ...basePayload,
         banco_id: entry.bancoId || '',
+        banco_destino: destName,
+        banco_destino_id: destId,
       },
       { onConflict: 'id' }
     );
 
-    if (error && (error.code === '42703' || error.message?.includes('banco_id'))) {
-      const retry = await supabase.from('financial_entries').upsert(basePayload, { onConflict: 'id' });
-      error = retry.error;
+    if (
+      error &&
+      (error.code === '42703' ||
+        error.message?.includes('banco_id') ||
+        error.message?.includes('banco_destino'))
+    ) {
+      const retryWithBancoId = await supabase.from('financial_entries').upsert(
+        {
+          ...basePayload,
+          banco_id: entry.bancoId || '',
+        },
+        { onConflict: 'id' }
+      );
+      error = retryWithBancoId.error;
+
+      if (error && (error.code === '42703' || error.message?.includes('banco_id'))) {
+        const retryBase = await supabase.from('financial_entries').upsert(basePayload, { onConflict: 'id' });
+        error = retryBase.error;
+      }
     }
 
     return !error;

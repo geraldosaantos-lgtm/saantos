@@ -137,7 +137,7 @@ export interface GoalsConfig {
   calendarConfig?: GoalsCalendarConfig;
 }
 
-export type AccountPlanType = 'receita' | 'despesa';
+export type AccountPlanType = 'receita' | 'despesa' | 'transferencia';
 
 export interface AccountPlanItem {
   id: string;
@@ -191,6 +191,8 @@ export interface FinancialEntry {
   valor: number;
   banco: string;
   bancoId?: string;
+  bancoDestino?: string;
+  bancoDestinoId?: string;
   formaPagamento?: string;
   documento?: string;
   status: 'Conciliado' | 'Pendente';

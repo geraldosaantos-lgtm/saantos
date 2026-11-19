@@ -484,6 +484,15 @@ export const defaultAccountsPlan: AccountPlanItem[] = [
     descricao: 'Deslocamentos, alimentação, internet e materiais de escritório',
     ativo: true,
   },
+  {
+    id: 'acc-transf-1',
+    codigo: '3.01',
+    nome: 'TRANSFERÊNCIA ENTRE CONTAS',
+    tipo: 'transferencia',
+    grupo: 'TRANSFERÊNCIAS BANCÁRIAS',
+    descricao: 'Movimentação entre contas bancárias e caixa interno (atualiza saldo sem entrar como receita ou despesa)',
+    ativo: true,
+  },
 ];
 
 export const defaultFinancialCustomFields: FinancialCustomField[] = [
@@ -640,17 +649,28 @@ export const loadStoredData = (): AppState => {
           : [],
       }));
 
-      const rawAccountsPlan: AccountPlanItem[] = Array.isArray(parsed.accountsPlan)
+      const parsedAccountsPlan: AccountPlanItem[] = Array.isArray(parsed.accountsPlan)
         ? parsed.accountsPlan.map((a: any) => ({
             id: a.id || `acc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             codigo: (a.codigo || '').toUpperCase(),
             nome: (a.nome || '').toUpperCase(),
-            tipo: a.tipo === 'receita' ? 'receita' : 'despesa',
+            tipo:
+              a.tipo === 'receita'
+                ? 'receita'
+                : a.tipo === 'transferencia'
+                ? 'transferencia'
+                : 'despesa',
             grupo: (a.grupo || 'GERAL').toUpperCase(),
             descricao: a.descricao || '',
             ativo: a.ativo !== false,
           }))
         : defaultAccountsPlan;
+
+      const defaultTransferAcc = defaultAccountsPlan.find((a) => a.tipo === 'transferencia');
+      const rawAccountsPlan: AccountPlanItem[] =
+        defaultTransferAcc && !parsedAccountsPlan.some((a) => a.tipo === 'transferencia')
+          ? [...parsedAccountsPlan, defaultTransferAcc]
+          : parsedAccountsPlan;
 
       const rawBankAccounts: BankAccount[] = Array.isArray(parsed.bankAccounts)
         ? parsed.bankAccounts.map((b: any) => ({
@@ -674,13 +694,20 @@ export const loadStoredData = (): AppState => {
             id: f.id || `fin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             data: f.data || new Date().toISOString().slice(0, 10),
             descricao: (f.descricao || '').toUpperCase(),
-            tipo: f.tipo === 'receita' ? 'receita' : 'despesa',
+            tipo:
+              f.tipo === 'receita'
+                ? 'receita'
+                : f.tipo === 'transferencia'
+                ? 'transferencia'
+                : 'despesa',
             contaId: f.contaId || '',
             contaNome: (f.contaNome || '').toUpperCase(),
             grupo: (f.grupo || '').toUpperCase(),
             valor: Math.abs(Number(f.valor) || 0),
             banco: (f.banco || 'CAIXA').toUpperCase(),
             bancoId: f.bancoId || '',
+            bancoDestino: (f.bancoDestino || '').toUpperCase(),
+            bancoDestinoId: f.bancoDestinoId || '',
             formaPagamento: (f.formaPagamento || '').toUpperCase(),
             documento: (f.documento || '').toUpperCase(),
             status: f.status === 'Pendente' ? 'Pendente' : 'Conciliado',

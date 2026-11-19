@@ -771,8 +771,14 @@ export default function App() {
       const idx = list.findIndex((b) => b.id === bank.id);
       const nextBanks = idx >= 0 ? list.map((b, i) => (i === idx ? bank : b)) : [...list, bank];
       const nextEntries = (prev.financialEntries || []).map((e) => {
-        if (e.bancoId === bank.id && e.banco !== bank.nome) {
-          const updated = { ...e, banco: bank.nome };
+        const matchOrigem = e.bancoId === bank.id && e.banco !== bank.nome;
+        const matchDestino = e.bancoDestinoId === bank.id && e.bancoDestino !== bank.nome;
+        if (matchOrigem || matchDestino) {
+          const updated = {
+            ...e,
+            ...(matchOrigem ? { banco: bank.nome } : {}),
+            ...(matchDestino ? { bancoDestino: bank.nome } : {}),
+          };
           updatedEntriesToSync.push(updated);
           return updated;
         }

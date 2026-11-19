@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { AccountPlanItem, FinancialEntry, FinancialCustomField } from '../types';
+import { AccountPlanItem, AccountPlanType, FinancialEntry, FinancialCustomField } from '../types';
 
 export type StatementAnalysisStatus = 'historico' | 'regra' | 'explicit' | 'manual' | 'pendente';
 
@@ -7,10 +7,12 @@ export interface ParsedBankRow {
   tempId: string;
   data: string; // YYYY-MM-DD
   descricao: string;
-  tipo: 'receita' | 'despesa';
+  tipo: AccountPlanType;
   valor: number;
   banco: string;
   bancoId?: string;
+  bancoDestino?: string;
+  bancoDestinoId?: string;
   formaPagamento: string;
   documento: string;
   contaId: string;
@@ -190,7 +192,7 @@ export interface LineAnalysisResult {
  */
 export const analyzeStatementLineAccount = (
   description: string,
-  tipo: 'receita' | 'despesa',
+  tipo: AccountPlanType,
   accountsPlan: AccountPlanItem[],
   existingEntries: FinancialEntry[] = []
 ): LineAnalysisResult => {
@@ -207,6 +209,24 @@ export const analyzeStatementLineAccount = (
   const normDesc = normalizeForMatch(description);
   const descTokens = extractSignificantTokens(description);
 
+  // 0. Se o tipo já é transferência ou descrição indica claramente transferência entre contas próprias
+  const transferAccounts = accountsPlan.filter((a) => a.tipo === 'transferencia');
+  const activeTransferAcc = transferAccounts.find((a) => a.ativo) || transferAccounts[0];
+  if (tipo === 'transferencia') {
+    const matchedTransf =
+      pool.find((a) => {
+        const toks = extractSignificantTokens(a.nome);
+        return toks.some((t) => t.length >= 4 && normDesc.includes(t));
+      }) || pool[0];
+    if (matchedTransf) {
+      return {
+        account: matchedTransf,
+        status: 'regra',
+        reason: 'Transferência entre contas — informe a conta bancária de destino',
+      };
+    }
+  }
+
   // 1. Aprendizado pelo histórico de lançamentos já classificados pelo usuário
   if (existingEntries.length > 0 && normDesc) {
     let bestHistoryScore = 0;
@@ -214,8 +234,9 @@ export const analyzeStatementLineAccount = (
     let bestHistoryAccount: AccountPlanItem | undefined;
 
     for (const entry of existingEntries) {
-      if (entry.tipo !== tipo || !entry.contaId) continue;
-      const acc = pool.find((a) => a.id === entry.contaId) || accountsPlan.find((a) => a.id === entry.contaId);
+      if (!entry.contaId) continue;
+      if (entry.tipo !== tipo && entry.tipo !== 'transferencia') continue;
+      const acc = accountsPlan.find((a) => a.id === entry.contaId);
       if (!acc) continue;
 
       const entryNorm = normalizeForMatch(entry.descricao);
@@ -308,6 +329,21 @@ export const analyzeStatementLineAccount = (
   }
 
   // 3. Regras bancárias e operacionais conhecidas
+  if (
+    activeTransferAcc &&
+    (normDesc.includes('MESMA TITULARIDADE') ||
+      normDesc.includes('ENTRE CONTAS') ||
+      normDesc.includes('TRANSF INTERNA') ||
+      normDesc.includes('TRANSFERENCIA PARA CAIXA') ||
+      normDesc.includes('DEPOSITO CAIXA'))
+  ) {
+    return {
+      account: activeTransferAcc,
+      status: 'regra',
+      reason: 'Possível transferência entre contas — confira a conta de destino',
+    };
+  }
+
   if (tipo === 'despesa') {
     const rules: Array<{ keywords: string[]; match: string[]; label: string }> = [
       { keywords: ['ENERGIA', 'CEMIG', 'ENEL', 'CPFL', 'LIGHT', 'COPEL', 'CELESC', 'ELETRIC'], match: ['ENERGIA'], label: 'Energia' },
@@ -338,7 +374,7 @@ export const analyzeStatementLineAccount = (
         }
       }
     }
-  } else {
+  } else if (tipo === 'receita') {
     const rules: Array<{ keywords: string[]; match: string[]; label: string }> = [
       { keywords: ['BOLETO', 'FATURA', 'MENSAL', 'FROTA', 'CONTRATO', 'LIQ TIT'], match: ['FROTA', 'CONTRATO'], label: 'Faturamento Frota/Boleto' },
       { keywords: ['POLIMENTO', 'HIGIENIZACAO', 'CRISTALIZACAO', 'VITRIFICACAO', 'ESTETICA'], match: ['POLIMENTO', 'HIGIENIZACAO', 'ESTETICA'], label: 'Estética/Polimento' },
@@ -375,7 +411,7 @@ export const analyzeStatementLineAccount = (
  */
 export const suggestAccountForDescription = (
   description: string,
-  tipo: 'receita' | 'despesa',
+  tipo: AccountPlanType,
   accountsPlan: AccountPlanItem[],
   existingEntries: FinancialEntry[] = []
 ): AccountPlanItem | undefined => {
@@ -436,13 +472,13 @@ const buildParsedRow = (
   banco: string,
   documento: string,
   accountsPlan: AccountPlanItem[],
-  explicitTipo?: 'receita' | 'despesa',
+  explicitTipo?: AccountPlanType,
   explicitContaNome?: string,
   explicitObs?: string,
   camposExtras?: Record<string, string>,
   existingEntries: FinancialEntry[] = []
 ): ParsedBankRow => {
-  const tipo: 'receita' | 'despesa' = explicitTipo || (signedAmount >= 0 ? 'receita' : 'despesa');
+  const tipo: AccountPlanType = explicitTipo || (signedAmount >= 0 ? 'receita' : 'despesa');
   const valor = Math.abs(signedAmount);
   const cleanDesc = (descricao || 'LANÇAMENTO BANCÁRIO').trim().toUpperCase();
 
@@ -475,6 +511,8 @@ const buildParsedRow = (
     tipo: matchedAccount ? matchedAccount.tipo : tipo,
     valor,
     banco: (banco || 'EXTRATO BANCÁRIO').trim().toUpperCase(),
+    bancoDestino: '',
+    bancoDestinoId: '',
     formaPagamento: detectPaymentMethod(cleanDesc),
     documento: (documento || '').trim().toUpperCase(),
     contaId: matchedAccount?.id || '',
@@ -672,7 +710,7 @@ const parseMatrixRows = (
     let obsVal = colMap.observacoes >= 0 ? String(row[colMap.observacoes] ?? '') : '';
 
     let signedAmount = 0;
-    let explicitTipo: 'receita' | 'despesa' | undefined;
+    let explicitTipo: AccountPlanType | undefined;
 
     if (colMap.credito >= 0 || colMap.debito >= 0) {
       const cred = colMap.credito >= 0 ? Math.abs(parseFlexibleAmount(row[colMap.credito])) : 0;
@@ -702,7 +740,10 @@ const parseMatrixRows = (
 
     if (colMap.tipo >= 0 && row[colMap.tipo]) {
       const rawTipo = String(row[colMap.tipo]).trim().toUpperCase();
-      if (rawTipo.startsWith('R') || rawTipo === 'C' || rawTipo.includes('CRED') || rawTipo.includes('ENTR')) {
+      if (rawTipo.includes('TRANSF') || rawTipo === 'T') {
+        explicitTipo = 'transferencia';
+        signedAmount = Math.abs(signedAmount);
+      } else if (rawTipo.startsWith('R') || rawTipo === 'C' || rawTipo.includes('CRED') || rawTipo.includes('ENTR')) {
         explicitTipo = 'receita';
         signedAmount = Math.abs(signedAmount);
       } else if (rawTipo.startsWith('D') || rawTipo.includes('DEB') || rawTipo.includes('SAID') || rawTipo.includes('DESP')) {
@@ -979,7 +1020,8 @@ export const exportFinancialEntriesToExcel = (
     'Plano de Contas',
     'Grupo',
     'Valor (R$)',
-    'Banco',
+    'Banco / Origem',
+    'Banco Destino (Transferência)',
     'Forma Pagamento',
     'Documento',
     'Status',
@@ -990,12 +1032,13 @@ export const exportFinancialEntriesToExcel = (
 
   const dataRows = entries.map((e) => [
     e.data.split('-').reverse().join('/'),
-    e.tipo === 'receita' ? 'RECEITA' : 'DESPESA',
+    e.tipo === 'receita' ? 'RECEITA' : e.tipo === 'transferencia' ? 'TRANSFERÊNCIA' : 'DESPESA',
     e.descricao,
     e.contaNome,
     e.grupo,
-    e.tipo === 'receita' ? e.valor : -e.valor,
+    e.tipo === 'despesa' ? -e.valor : e.valor,
     e.banco,
+    e.tipo === 'transferencia' ? e.bancoDestino || '' : '',
     e.formaPagamento || '',
     e.documento || '',
     e.status,
@@ -1014,12 +1057,19 @@ export const exportFinancialEntriesToExcel = (
  * Exporta o Plano de Contas editável para Excel (.xlsx)
  */
 export const exportAccountsPlanToExcel = (accounts: AccountPlanItem[]) => {
-  const headers = ['Código', 'Tipo (Receita/Despesa)', 'Grupo / Categoria', 'Nome da Conta', 'Descrição', 'Status'];
+  const headers = [
+    'Código',
+    'Tipo (Receita/Despesa/Transferência)',
+    'Grupo / Categoria',
+    'Nome da Conta',
+    'Descrição',
+    'Status',
+  ];
   const rows = [...accounts]
     .sort((a, b) => a.codigo.localeCompare(b.codigo))
     .map((a) => [
       a.codigo,
-      a.tipo === 'receita' ? 'Receita' : 'Despesa',
+      a.tipo === 'receita' ? 'Receita' : a.tipo === 'transferencia' ? 'Transferência' : 'Despesa',
       a.grupo,
       a.nome,
       a.descricao || '',
@@ -1079,17 +1129,34 @@ export const parseAccountsPlanFile = async (file: File): Promise<AccountPlanItem
     const rawStatus = String((colMap.status >= 0 ? r[colMap.status] : '') ?? '').trim().toUpperCase();
 
     if (!nome) continue;
+    const isTransferencia = rawTipo.includes('TRANSF') || codigo.startsWith('3.');
     const isReceita =
-      rawTipo.startsWith('R') ||
-      rawTipo.includes('CRED') ||
-      rawTipo.includes('ENTR') ||
-      codigo.startsWith('1.');
+      !isTransferencia &&
+      (rawTipo.startsWith('R') ||
+        rawTipo.includes('CRED') ||
+        rawTipo.includes('ENTR') ||
+        codigo.startsWith('1.'));
+    const tipoParsed: AccountPlanType = isTransferencia
+      ? 'transferencia'
+      : isReceita
+      ? 'receita'
+      : 'despesa';
 
     imported.push({
       id: `acc-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
-      codigo: codigo || `${isReceita ? '1' : '2'}.${String(imported.length + 1).padStart(2, '0')}`,
-      tipo: isReceita ? 'receita' : 'despesa',
-      grupo: grupo || (isReceita ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS'),
+      codigo:
+        codigo ||
+        `${tipoParsed === 'receita' ? '1' : tipoParsed === 'transferencia' ? '3' : '2'}.${String(
+          imported.length + 1
+        ).padStart(2, '0')}`,
+      tipo: tipoParsed,
+      grupo:
+        grupo ||
+        (tipoParsed === 'receita'
+          ? 'RECEITAS OPERACIONAIS'
+          : tipoParsed === 'transferencia'
+          ? 'TRANSFERÊNCIAS BANCÁRIAS'
+          : 'DESPESAS OPERACIONAIS'),
       nome,
       descricao,
       ativo: rawStatus ? !rawStatus.includes('INATIV') : true,

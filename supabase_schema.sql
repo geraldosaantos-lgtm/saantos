@@ -219,6 +219,8 @@ CREATE TABLE IF NOT EXISTS public.financial_entries (
   valor NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   banco TEXT DEFAULT 'CAIXA',
   banco_id TEXT DEFAULT '',
+  banco_destino TEXT DEFAULT '',
+  banco_destino_id TEXT DEFAULT '',
   forma_pagamento TEXT DEFAULT '',
   documento TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'Conciliado',
@@ -231,6 +233,8 @@ CREATE TABLE IF NOT EXISTS public.financial_entries (
 );
 
 ALTER TABLE public.financial_entries ADD COLUMN IF NOT EXISTS banco_id TEXT DEFAULT '';
+ALTER TABLE public.financial_entries ADD COLUMN IF NOT EXISTS banco_destino TEXT DEFAULT '';
+ALTER TABLE public.financial_entries ADD COLUMN IF NOT EXISTS banco_destino_id TEXT DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_financial_entries_data ON public.financial_entries(data DESC);
 CREATE INDEX IF NOT EXISTS idx_financial_entries_tipo ON public.financial_entries(tipo);
