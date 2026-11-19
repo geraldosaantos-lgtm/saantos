@@ -18,6 +18,8 @@ import {
   exportFinancialEntriesToExcel,
   exportAccountsPlanToExcel,
   parseAccountsPlanFile,
+  analyzeStatementLineAccount,
+  reanalyzeStagingRows,
 } from '../utils/bankStatementParser';
 import { ConfirmModal } from './ConfirmModal';
 import {
@@ -209,6 +211,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   const [bankDefaultName, setBankDefaultName] = useState(defaultActiveBank?.nome || 'SICREDI');
   const [pastedText, setPastedText] = useState('');
   const [stagingRows, setStagingRows] = useState<ParsedBankRow[]>([]);
+  const [stagingFilter, setStagingFilter] = useState<'todas' | 'pendentes' | 'classificadas'>('todas');
   const [importFeedback, setImportFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [stagingBulkContaId, setStagingBulkContaId] = useState('');
 
@@ -710,12 +713,36 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     setSelectedIds([]);
   };
 
+  const stagingStats = useMemo(() => {
+    let pendentes = 0;
+    let totalReceitas = 0;
+    let totalDespesas = 0;
+    stagingRows.forEach((r) => {
+      if (!r.contaId) pendentes += 1;
+      if (r.tipo === 'receita') totalReceitas += Math.abs(Number(r.valor) || 0);
+      else totalDespesas += Math.abs(Number(r.valor) || 0);
+    });
+    return {
+      total: stagingRows.length,
+      pendentes,
+      classificadas: stagingRows.length - pendentes,
+      totalReceitas,
+      totalDespesas,
+    };
+  }, [stagingRows]);
+
+  const visibleStagingRows = useMemo(() => {
+    if (stagingFilter === 'pendentes') return stagingRows.filter((r) => !r.contaId);
+    if (stagingFilter === 'classificadas') return stagingRows.filter((r) => Boolean(r.contaId));
+    return stagingRows;
+  }, [stagingRows, stagingFilter]);
+
   // Handlers de Extrato Bancário
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const parsed = await parseBankStatementFile(file, accountsPlan, customFields);
+      const parsed = await parseBankStatementFile(file, accountsPlan, customFields, entries);
       if (parsed.length === 0) {
         setImportFeedback({
           type: 'error',
@@ -738,10 +765,16 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             bancoId: bankMatch?.id || '',
           };
         });
+        const pendingCount = withBank.filter((r) => !r.contaId).length;
+        const classifiedCount = withBank.length - pendingCount;
         setStagingRows((prev) => [...prev, ...withBank]);
+        setStagingFilter('todas');
         setImportFeedback({
           type: 'success',
-          msg: `${withBank.length} linhas carregadas do arquivo "${file.name}". Edite qualquer campo abaixo antes de salvar.`,
+          msg:
+            pendingCount > 0
+              ? `${withBank.length} linha(s) analisada(s) de "${file.name}": ${classifiedCount} com Plano de Contas sugerido e ${pendingCount} pendente(s) — informe em qual conta lançar abaixo.`
+              : `${withBank.length} linha(s) analisada(s) de "${file.name}" e todas já identificadas com Plano de Contas! Revise abaixo antes de confirmar.`,
         });
       }
     } catch (err: any) {
@@ -761,7 +794,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       pastedText,
       accountsPlan,
       customFields,
-      chosenBank?.nome || bankDefaultName.toUpperCase() || 'EXTRATO BANCÁRIO'
+      chosenBank?.nome || bankDefaultName.toUpperCase() || 'EXTRATO BANCÁRIO',
+      entries
     );
     if (parsed.length === 0) {
       setImportFeedback({
@@ -774,11 +808,17 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         banco: chosenBank?.nome || r.banco,
         bancoId: chosenBank?.id || '',
       }));
+      const pendingCount = withBank.filter((r) => !r.contaId).length;
+      const classifiedCount = withBank.length - pendingCount;
       setStagingRows((prev) => [...prev, ...withBank]);
+      setStagingFilter('todas');
       setPastedText('');
       setImportFeedback({
         type: 'success',
-        msg: `${parsed.length} lançamentos extraídos do texto! Você pode editar todos os campos antes de salvar.`,
+        msg:
+          pendingCount > 0
+            ? `${parsed.length} linha(s) analisada(s): ${classifiedCount} classificada(s) no Plano de Contas e ${pendingCount} aguardando sua seleção.`
+            : `${parsed.length} linha(s) analisada(s) e todas já vinculadas ao Plano de Contas! Revise antes de confirmar.`,
       });
     }
   };
@@ -791,6 +831,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       bancoId: chosenBank?.id || '',
     }));
     setStagingRows((prev) => [...prev, ...modelRows]);
+    setStagingFilter('todas');
     setImportFeedback({
       type: 'success',
       msg: 'Modelo editável carregado na pré-visualização! Altere qualquer campo, adicione ou apague linhas conforme sua necessidade.',
@@ -798,7 +839,6 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   };
 
   const handleAddEmptyStagingRow = () => {
-    const firstAcc = accountsPlan.find((a) => a.ativo && a.tipo === 'despesa') || accountsPlan[0];
     const chosenBank = bankAccounts.find((b) => b.id === selectedExtratoBankId) || defaultActiveBank;
     const emptyExtras: Record<string, string> = {};
     customFields.forEach((f) => {
@@ -810,20 +850,66 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         tempId: `new-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
         data: todayStr,
         descricao: '',
-        tipo: firstAcc?.tipo || 'despesa',
+        tipo: 'despesa',
         valor: 0,
         banco: (chosenBank?.nome || bankDefaultName || 'SICREDI').toUpperCase(),
         bancoId: chosenBank?.id || '',
         formaPagamento: 'PIX',
         documento: '',
-        contaId: firstAcc?.id || '',
-        contaNome: firstAcc?.nome || '',
-        grupo: firstAcc?.grupo || '',
+        contaId: '',
+        contaNome: '',
+        grupo: '',
         status: 'Conciliado',
         observacoes: '',
         camposExtras: emptyExtras,
+        analysisStatus: 'pendente',
+        analysisReason: 'Nova linha — preencha a descrição ou selecione o Plano de Contas',
       },
     ]);
+  };
+
+  const handleAnalyzeSingleRow = (tempId: string) => {
+    setStagingRows((prev) =>
+      prev.map((row) => {
+        if (row.tempId !== tempId) return row;
+        if (row.analysisStatus === 'manual' || row.analysisStatus === 'explicit') return row;
+        if (!row.descricao.trim()) return row;
+        const analysis = analyzeStatementLineAccount(row.descricao, row.tipo, accountsPlan, entries);
+        if (analysis.account) {
+          return {
+            ...row,
+            contaId: analysis.account.id,
+            contaNome: analysis.account.nome,
+            grupo: analysis.account.grupo,
+            tipo: analysis.account.tipo,
+            analysisStatus: analysis.status,
+            analysisReason: analysis.reason,
+          };
+        }
+        return {
+          ...row,
+          contaId: '',
+          contaNome: '',
+          grupo: '',
+          analysisStatus: 'pendente',
+          analysisReason: analysis.reason,
+        };
+      })
+    );
+  };
+
+  const handleReanalyzeAllStaging = () => {
+    if (stagingRows.length === 0) return;
+    const next = reanalyzeStagingRows(stagingRows, accountsPlan, entries);
+    setStagingRows(next);
+    const pendingCount = next.filter((r) => !r.contaId).length;
+    setImportFeedback({
+      type: 'success',
+      msg:
+        pendingCount === 0
+          ? `Análise concluída: todas as ${next.length} linhas possuem Plano de Contas informado.`
+          : `Análise atualizada: ${next.length - pendingCount} classificadas e ${pendingCount} aguardando definição manual.`,
+    });
   };
 
   const updateStagingRow = (tempId: string, patch: Partial<ParsedBankRow>) => {
@@ -832,11 +918,22 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         if (row.tempId !== tempId) return row;
         const updated = { ...row, ...patch };
         if (patch.contaId !== undefined) {
-          const acc = accountsPlan.find((a) => a.id === patch.contaId);
-          if (acc) {
-            updated.contaNome = acc.nome;
-            updated.grupo = acc.grupo;
-            updated.tipo = acc.tipo;
+          if (!patch.contaId) {
+            updated.contaId = '';
+            updated.contaNome = '';
+            updated.grupo = '';
+            updated.analysisStatus = 'pendente';
+            updated.analysisReason = 'Selecione em qual Plano de Contas lançar';
+          } else {
+            const acc = accountsPlan.find((a) => a.id === patch.contaId);
+            if (acc) {
+              updated.contaNome = acc.nome;
+              updated.grupo = acc.grupo;
+              updated.tipo = acc.tipo;
+              updated.analysisStatus = patch.analysisStatus || 'manual';
+              updated.analysisReason =
+                patch.analysisReason || `Informado (${acc.codigo} · ${acc.nome})`;
+            }
           }
         }
         return updated;
@@ -844,18 +941,23 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     );
   };
 
-  const handleApplyStagingBulkAccount = () => {
+  const handleApplyStagingBulkAccount = (onlyPending = false) => {
     if (!stagingBulkContaId) return;
     const acc = accountsPlan.find((a) => a.id === stagingBulkContaId);
     if (!acc) return;
     setStagingRows((prev) =>
-      prev.map((row) => ({
-        ...row,
-        contaId: acc.id,
-        contaNome: acc.nome,
-        grupo: acc.grupo,
-        tipo: acc.tipo,
-      }))
+      prev.map((row) => {
+        if (onlyPending && row.contaId) return row;
+        return {
+          ...row,
+          contaId: acc.id,
+          contaNome: acc.nome,
+          grupo: acc.grupo,
+          tipo: acc.tipo,
+          analysisStatus: 'manual',
+          analysisReason: `Aplicado em lote (${acc.codigo} · ${acc.nome})`,
+        };
+      })
     );
     setStagingBulkContaId('');
   };
@@ -864,7 +966,18 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     const valid = stagingRows.filter((r) => r.descricao.trim() !== '' || r.valor > 0);
     if (valid.length === 0) return;
 
+    const missingAccount = valid.filter((r) => !r.contaId);
+    if (missingAccount.length > 0) {
+      setStagingFilter('pendentes');
+      setImportFeedback({
+        type: 'error',
+        msg: `Cada linha do extrato deve informar em qual Plano de Contas será lançada. Faltam ${missingAccount.length} linha(s) destacada(s) abaixo.`,
+      });
+      return;
+    }
+
     const toSave: FinancialEntry[] = valid.map((r, idx) => {
+      const matchedAcc = accountsPlan.find((a) => a.id === r.contaId);
       const matchedBank =
         (r.bancoId ? bankAccounts.find((b) => b.id === r.bancoId) : undefined) ||
         bankAccounts.find((b) => b.nome.trim().toUpperCase() === (r.banco || '').trim().toUpperCase());
@@ -872,10 +985,10 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         id: `fin-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         data: r.data || todayStr,
         descricao: (r.descricao || 'LANÇAMENTO EXTRATO').trim().toUpperCase(),
-        tipo: r.tipo,
+        tipo: matchedAcc?.tipo || r.tipo,
         contaId: r.contaId,
-        contaNome: (r.contaNome || (r.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS')).toUpperCase(),
-        grupo: (r.grupo || 'GERAL').toUpperCase(),
+        contaNome: (matchedAcc?.nome || r.contaNome || (r.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS')).toUpperCase(),
+        grupo: (matchedAcc?.grupo || r.grupo || 'GERAL').toUpperCase(),
         valor: Math.abs(Number(r.valor) || 0),
         banco: (matchedBank?.nome || r.banco || bankDefaultName || 'BANCO').trim().toUpperCase(),
         bancoId: matchedBank?.id || r.bancoId || '',
@@ -891,9 +1004,10 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
     onSaveEntriesBatch(toSave);
     setStagingRows([]);
+    setStagingFilter('todas');
     setImportFeedback({
       type: 'success',
-      msg: `${toSave.length} lançamentos salvos com sucesso no Financeiro!`,
+      msg: `${toSave.length} lançamentos salvos com sucesso no Financeiro com seus respectivos Planos de Contas!`,
     });
     setSubTab('movimentacoes');
   };
@@ -2056,23 +2170,41 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             </div>
           </div>
 
-          {/* Área de Pré-Visualização e Edição Completa antes de Alimentar o Financeiro */}
+          {/* Área de Análise Linha a Linha e Edição Completa antes de Lançar */}
           <div className="bg-white border border-neutral-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-neutral-100">
               <div>
                 <h3 className="text-sm font-bold text-neutral-950">
-                  Pré-visualização Editável do Extrato ({stagingRows.length} linhas)
+                  Análise &amp; Classificação do Extrato ({stagingRows.length} linhas)
                 </h3>
                 <p className="text-xs text-neutral-500">
-                  Edite livremente qualquer campo (Data, Descrição, Tipo, Plano de Contas, Valor, Banco ou Campos Extras), adicione ou apague linhas antes de confirmar.
+                  Cada linha é analisada para sugerir o Plano de Contas correspondente. Confira ou informe a conta de lançamento antes de salvar.
                 </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                {stagingRows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleReanalyzeAllStaging}
+                    className="px-3 py-1.5 text-xs font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg flex items-center gap-1 whitespace-nowrap"
+                    title="Reanalisar linhas com base no Plano de Contas e histórico"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Reanalisar
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => openNewAccountModal('despesa')}
+                  className="px-3 py-1.5 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-lg flex items-center gap-1 whitespace-nowrap"
+                  title="Criar uma nova conta no Plano de Contas sem perder as linhas do extrato"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Nova Conta no Plano
+                </button>
                 <button
                   type="button"
                   onClick={handleAddEmptyStagingRow}
-                  className="px-3 py-1.5 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-lg flex items-center gap-1"
+                  className="px-3 py-1.5 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-lg flex items-center gap-1 whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5" /> Adicionar Linha
                 </button>
@@ -2081,17 +2213,17 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setStagingRows([])}
-                      className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg"
+                      className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg whitespace-nowrap"
                     >
                       Limpar Lista
                     </button>
                     <button
                       type="button"
                       onClick={handleCommitStagingRows}
-                      className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg flex items-center gap-1.5 shadow-xs"
+                      className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg flex items-center gap-1.5 shadow-xs whitespace-nowrap"
                     >
                       <Save className="w-3.5 h-3.5" />
-                      Confirmar e Salvar ({stagingRows.length})
+                      Confirmar e Lançar ({stagingRows.length})
                     </button>
                   </>
                 )}
@@ -2099,28 +2231,103 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             </div>
 
             {stagingRows.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 bg-neutral-50 p-2.5 rounded-xl border border-neutral-200 text-xs">
-                <span className="font-semibold text-neutral-700">Aplicar conta em todas as linhas:</span>
-                <select
-                  value={stagingBulkContaId}
-                  onChange={(e) => setStagingBulkContaId(e.target.value)}
-                  className="px-2.5 py-1.5 border border-neutral-300 rounded-lg bg-white text-xs"
-                >
-                  <option value="">-- Escolha uma conta --</option>
-                  {accountsPlan.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.tipo === 'receita' ? '[RECEITA]' : '[DESPESA]'} {a.codigo} · {a.nome}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handleApplyStagingBulkAccount}
-                  disabled={!stagingBulkContaId}
-                  className="px-3 py-1.5 bg-neutral-900 text-white rounded-lg font-semibold disabled:opacity-40"
-                >
-                  Aplicar a Todos
-                </button>
+              <div className="space-y-3">
+                {/* Resumo da Análise Automática */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                  <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+                    <span className="text-[10px] font-bold uppercase text-neutral-500 block">Linhas no Extrato</span>
+                    <span className="text-base font-black font-mono tabular-nums text-neutral-950">
+                      {stagingStats.total}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl">
+                    <span className="text-[10px] font-bold uppercase text-emerald-700 block">
+                      Plano de Contas Definido
+                    </span>
+                    <span className="text-base font-black font-mono tabular-nums text-emerald-800">
+                      {stagingStats.classificadas} / {stagingStats.total}
+                    </span>
+                  </div>
+                  <div
+                    className={`p-3 border rounded-xl ${
+                      stagingStats.pendentes > 0
+                        ? 'bg-amber-50 border-amber-300 text-amber-900'
+                        : 'bg-neutral-50 border-neutral-200 text-neutral-800'
+                    }`}
+                  >
+                    <span className="text-[10px] font-bold uppercase block">
+                      Sem Plano de Contas
+                    </span>
+                    <span className="text-base font-black font-mono tabular-nums">
+                      {stagingStats.pendentes === 0 ? '0 (Tudo pronto)' : `${stagingStats.pendentes} pendente(s)`}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+                    <span className="text-[10px] font-bold uppercase text-neutral-500 block">Totais do Lote</span>
+                    <div className="font-mono font-bold tabular-nums text-[11px] flex items-center gap-2 mt-0.5">
+                      <span className="text-emerald-700">+{formatCurrency(stagingStats.totalReceitas)}</span>
+                      <span className="text-rose-700">-{formatCurrency(stagingStats.totalDespesas)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filtros da Análise + Classificação em Lote */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 bg-neutral-50 p-2.5 rounded-xl border border-neutral-200 text-xs">
+                  <div className="flex flex-wrap items-center gap-1 bg-neutral-200/70 p-1 rounded-lg">
+                    {[
+                      { id: 'todas', label: `Todas (${stagingStats.total})` },
+                      { id: 'pendentes', label: `Sem Conta (${stagingStats.pendentes})` },
+                      { id: 'classificadas', label: `Classificadas (${stagingStats.classificadas})` },
+                    ].map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setStagingFilter(f.id as any)}
+                        className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                          stagingFilter === f.id
+                            ? 'bg-white text-neutral-950 font-bold shadow-2xs'
+                            : 'text-neutral-600 hover:text-neutral-950'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-neutral-700">Definir conta em lote:</span>
+                    <select
+                      value={stagingBulkContaId}
+                      onChange={(e) => setStagingBulkContaId(e.target.value)}
+                      className="px-2.5 py-1.5 border border-neutral-300 rounded-lg bg-white text-xs max-w-[240px]"
+                    >
+                      <option value="">-- Escolha uma conta --</option>
+                      {accountsPlan.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.tipo === 'receita' ? '[RECEITA]' : '[DESPESA]'} {a.codigo} · {a.nome}
+                        </option>
+                      ))}
+                    </select>
+                    {stagingStats.pendentes > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleApplyStagingBulkAccount(true)}
+                        disabled={!stagingBulkContaId}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-semibold disabled:opacity-40 whitespace-nowrap"
+                      >
+                        Aplicar às Pendentes ({stagingStats.pendentes})
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleApplyStagingBulkAccount(false)}
+                      disabled={!stagingBulkContaId}
+                      className="px-3 py-1.5 bg-neutral-900 text-white rounded-lg font-semibold disabled:opacity-40 whitespace-nowrap"
+                    >
+                      Aplicar a Todas
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2138,10 +2345,21 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
               <>
                 {/* Cards Mobile Editáveis para Extrato */}
                 <div className="block md:hidden space-y-3">
-                  {stagingRows.map((row) => (
+                  {visibleStagingRows.length === 0 && (
+                    <div className="py-6 text-center text-xs text-neutral-500 border border-dashed border-neutral-300 rounded-xl">
+                      Nenhuma linha nesta visualização ({stagingFilter === 'pendentes' ? 'Sem Conta' : 'Classificadas'}).
+                    </div>
+                  )}
+                  {visibleStagingRows.map((row) => {
+                    const isMissingAccount = !row.contaId;
+                    return (
                     <div
                       key={row.tempId}
-                      className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl space-y-2 text-xs"
+                      className={`p-3 border rounded-xl space-y-2 text-xs ${
+                        isMissingAccount
+                          ? 'bg-amber-50/50 border-amber-300'
+                          : 'bg-neutral-50 border-neutral-200'
+                      }`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <input
@@ -2152,7 +2370,18 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         />
                         <select
                           value={row.tipo}
-                          onChange={(e) => updateStagingRow(row.tempId, { tipo: e.target.value as AccountPlanType })}
+                          onChange={(e) => {
+                            const nextTipo = e.target.value as AccountPlanType;
+                            const analysis = analyzeStatementLineAccount(row.descricao, nextTipo, accountsPlan, entries);
+                            updateStagingRow(row.tempId, {
+                              tipo: nextTipo,
+                              contaId: analysis.account?.id || '',
+                              contaNome: analysis.account?.nome || '',
+                              grupo: analysis.account?.grupo || '',
+                              analysisStatus: analysis.status,
+                              analysisReason: analysis.reason,
+                            });
+                          }}
                           className={`px-2 py-1 border rounded font-bold text-xs ${
                             row.tipo === 'receita'
                               ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
@@ -2175,31 +2404,56 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         value={row.descricao}
                         placeholder="Descrição..."
                         onChange={(e) => updateStagingRow(row.tempId, { descricao: e.target.value.toUpperCase() })}
+                        onBlur={() => handleAnalyzeSingleRow(row.tempId)}
                         className="w-full px-2.5 py-1.5 border border-neutral-300 rounded bg-white font-semibold uppercase"
                       />
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <select
-                          value={row.contaId}
-                          onChange={(e) => updateStagingRow(row.tempId, { contaId: e.target.value })}
-                          className="px-2 py-1.5 border border-neutral-300 rounded bg-white text-xs"
+                      <div className="space-y-1">
+                        <div className="grid grid-cols-2 gap-2">
+                          <select
+                            value={row.contaId}
+                            onChange={(e) => updateStagingRow(row.tempId, { contaId: e.target.value })}
+                            className={`px-2 py-1.5 border rounded bg-white text-xs font-medium ${
+                              isMissingAccount ? 'border-amber-400 text-amber-900' : 'border-neutral-300'
+                            }`}
+                          >
+                            <option value="">-- Informe o Plano de Contas * --</option>
+                            {accountsPlan
+                              .filter((a) => a.tipo === row.tipo)
+                              .map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.codigo} · {a.nome}
+                                </option>
+                              ))}
+                          </select>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={row.valor}
+                            onChange={(e) => updateStagingRow(row.tempId, { valor: parseFloat(e.target.value) || 0 })}
+                            className="px-2.5 py-1.5 border border-neutral-300 rounded bg-white font-mono font-bold text-right"
+                          />
+                        </div>
+                        <div
+                          className={`text-[10px] flex items-center gap-1 ${
+                            isMissingAccount
+                              ? 'text-amber-800 font-semibold'
+                              : row.analysisStatus === 'historico'
+                              ? 'text-blue-700 font-medium'
+                              : row.analysisStatus === 'regra' || row.analysisStatus === 'explicit'
+                              ? 'text-emerald-700 font-medium'
+                              : 'text-neutral-500'
+                          }`}
                         >
-                          <option value="">-- Conta --</option>
-                          {accountsPlan
-                            .filter((a) => a.tipo === row.tipo)
-                            .map((a) => (
-                              <option key={a.id} value={a.id}>
-                                {a.codigo} · {a.nome}
-                              </option>
-                            ))}
-                        </select>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.valor}
-                          onChange={(e) => updateStagingRow(row.tempId, { valor: parseFloat(e.target.value) || 0 })}
-                          className="px-2.5 py-1.5 border border-neutral-300 rounded bg-white font-mono font-bold text-right"
-                        />
+                          {isMissingAccount ? (
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                          ) : (
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                          )}
+                          <span className="truncate">
+                            {row.analysisReason || (isMissingAccount ? 'Selecione em qual conta lançar' : 'Plano de Contas informado')}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
@@ -2230,7 +2484,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         />
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
 
                 {/* Tabela Desktop Planilha Totalmente Editável */}
@@ -2241,7 +2496,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         <th className="py-2 px-2 font-semibold">Data</th>
                         <th className="py-2 px-2 font-semibold">Tipo</th>
                         <th className="py-2 px-2 font-semibold">Descrição / Histórico</th>
-                        <th className="py-2 px-2 font-semibold">Plano de Contas</th>
+                        <th className="py-2 px-2 font-semibold">Plano de Contas a Lançar *</th>
                         <th className="py-2 px-2 font-semibold">Valor (R$)</th>
                         <th className="py-2 px-2 font-semibold">Banco</th>
                         <th className="py-2 px-2 font-semibold">Documento</th>
@@ -2255,8 +2510,13 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-200">
-                      {stagingRows.map((row) => (
-                        <tr key={row.tempId} className="hover:bg-neutral-50">
+                      {visibleStagingRows.map((row) => {
+                        const isMissingAccount = !row.contaId;
+                        return (
+                        <tr
+                          key={row.tempId}
+                          className={isMissingAccount ? 'bg-amber-50/50 hover:bg-amber-50/80' : 'hover:bg-neutral-50'}
+                        >
                           <td className="py-1.5 px-2">
                             <input
                               type="date"
@@ -2270,10 +2530,14 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                               value={row.tipo}
                               onChange={(e) => {
                                 const nextTipo = e.target.value as AccountPlanType;
-                                const nextAcc = accountsPlan.find((a) => a.tipo === nextTipo && a.ativo);
+                                const analysis = analyzeStatementLineAccount(row.descricao, nextTipo, accountsPlan, entries);
                                 updateStagingRow(row.tempId, {
                                   tipo: nextTipo,
-                                  contaId: nextAcc?.id || '',
+                                  contaId: analysis.account?.id || '',
+                                  contaNome: analysis.account?.nome || '',
+                                  grupo: analysis.account?.grupo || '',
+                                  analysisStatus: analysis.status,
+                                  analysisReason: analysis.reason,
                                 });
                               }}
                               className={`px-2 py-1 border rounded text-xs font-bold ${
@@ -2294,22 +2558,47 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                               onChange={(e) =>
                                 updateStagingRow(row.tempId, { descricao: e.target.value.toUpperCase() })
                               }
+                              onBlur={() => handleAnalyzeSingleRow(row.tempId)}
                               className="w-full min-w-[180px] px-2 py-1 border border-neutral-300 rounded bg-white uppercase"
                             />
                           </td>
-                          <td className="py-1.5 px-2">
+                          <td className="py-1.5 px-2 min-w-[230px]">
                             <select
                               value={row.contaId}
                               onChange={(e) => updateStagingRow(row.tempId, { contaId: e.target.value })}
-                              className="w-full min-w-[170px] px-2 py-1 border border-neutral-300 rounded bg-white text-xs"
+                              className={`w-full px-2 py-1 border rounded text-xs font-medium ${
+                                isMissingAccount
+                                  ? 'border-amber-400 bg-amber-50 text-amber-950 font-semibold'
+                                  : 'border-neutral-300 bg-white'
+                              }`}
                             >
-                              <option value="">-- Selecione Conta --</option>
+                              <option value="">-- Informe o Plano de Contas * --</option>
                               {accountsPlan.map((a) => (
                                 <option key={a.id} value={a.id}>
                                   {a.tipo === 'receita' ? '[REC]' : '[DESP]'} {a.codigo} · {a.nome}
                                 </option>
                               ))}
                             </select>
+                            <div
+                              className={`mt-1 text-[10px] flex items-center gap-1 leading-tight ${
+                                isMissingAccount
+                                  ? 'text-amber-800 font-semibold'
+                                  : row.analysisStatus === 'historico'
+                                  ? 'text-blue-700 font-medium'
+                                  : row.analysisStatus === 'regra' || row.analysisStatus === 'explicit'
+                                  ? 'text-emerald-700 font-medium'
+                                  : 'text-neutral-500'
+                              }`}
+                            >
+                              {isMissingAccount ? (
+                                <AlertCircle className="w-3 h-3 shrink-0" />
+                              ) : (
+                                <CheckCircle2 className="w-3 h-3 shrink-0" />
+                              )}
+                              <span className="truncate max-w-[220px]" title={row.analysisReason || ''}>
+                                {row.analysisReason || (isMissingAccount ? 'Informe em qual conta lançar' : 'Conta informada')}
+                              </span>
+                            </div>
                           </td>
                           <td className="py-1.5 px-2">
                             <input
@@ -2396,7 +2685,15 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
+                      {visibleStagingRows.length === 0 && (
+                        <tr>
+                          <td colSpan={9 + activeCustomFields.length} className="py-6 text-center text-xs text-neutral-500">
+                            Nenhuma linha nesta visualização ({stagingFilter === 'pendentes' ? 'Sem Conta' : 'Classificadas'}).
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>

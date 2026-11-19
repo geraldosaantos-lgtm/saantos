@@ -1,6 +1,8 @@
 import * as XLSX from 'xlsx';
 import { AccountPlanItem, FinancialEntry, FinancialCustomField } from '../types';
 
+export type StatementAnalysisStatus = 'historico' | 'regra' | 'explicit' | 'manual' | 'pendente';
+
 export interface ParsedBankRow {
   tempId: string;
   data: string; // YYYY-MM-DD
@@ -17,6 +19,8 @@ export interface ParsedBankRow {
   status: 'Conciliado' | 'Pendente';
   observacoes: string;
   camposExtras: Record<string, string>;
+  analysisStatus?: StatementAnalysisStatus;
+  analysisReason?: string;
 }
 
 /**
@@ -106,59 +110,311 @@ export const parseFlexibleDate = (raw: any): string => {
   return new Date().toISOString().slice(0, 10);
 };
 
+const normalizeForMatch = (raw: string): string =>
+  String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const STOP_WORDS = new Set([
+  'PIX',
+  'TED',
+  'DOC',
+  'PAG',
+  'PAGTO',
+  'PAGAMENTO',
+  'RECEBIMENTO',
+  'RECEBIDO',
+  'ENVIADO',
+  'TRANSF',
+  'TRANSFERENCIA',
+  'DEBITO',
+  'CREDITO',
+  'COMPRA',
+  'CARTAO',
+  'BOLETO',
+  'VALOR',
+  'CONTA',
+  'CONTAS',
+  'BANCO',
+  'MOVIMENTACAO',
+  'LANCAMENTO',
+  'EXTRATO',
+  'LTDA',
+  'EIRELI',
+  'EPP',
+  'MEI',
+  'PARA',
+  'COM',
+  'DOS',
+  'DAS',
+  'DEL',
+  'POR',
+  'VIA',
+  'DESPESA',
+  'DESPESAS',
+  'RECEITA',
+  'RECEITAS',
+  'GERAL',
+  'GERAIS',
+  'OUTRAS',
+  'OUTROS',
+  'OPERACIONAIS',
+  'OPERACIONAL',
+  'FIXAS',
+  'FIXA',
+  'SERVICO',
+  'SERVICOS',
+]);
+
+const extractSignificantTokens = (raw: string): string[] =>
+  normalizeForMatch(raw)
+    .split(' ')
+    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w));
+
+export interface LineAnalysisResult {
+  account?: AccountPlanItem;
+  status: StatementAnalysisStatus;
+  reason: string;
+}
+
+/**
+ * Analisa uma linha do extrato comparando com:
+ * 1) Histórico anterior de lançamentos financeiros do usuário
+ * 2) Nomes, grupos e descrições do Plano de Contas atual (editável)
+ * 3) Regras bancárias e operacionais (energia, água, insumos, frotas, tarifas, etc.)
+ * Quando não há correspondência segura, retorna status 'pendente' para que o usuário informe.
+ */
+export const analyzeStatementLineAccount = (
+  description: string,
+  tipo: 'receita' | 'despesa',
+  accountsPlan: AccountPlanItem[],
+  existingEntries: FinancialEntry[] = []
+): LineAnalysisResult => {
+  const candidates = accountsPlan.filter((a) => a.ativo && a.tipo === tipo);
+  const pool = candidates.length > 0 ? candidates : accountsPlan.filter((a) => a.tipo === tipo);
+
+  if (pool.length === 0) {
+    return {
+      status: 'pendente',
+      reason: 'Nenhuma conta cadastrada no Plano de Contas para este tipo — informe ou cadastre uma conta',
+    };
+  }
+
+  const normDesc = normalizeForMatch(description);
+  const descTokens = extractSignificantTokens(description);
+
+  // 1. Aprendizado pelo histórico de lançamentos já classificados pelo usuário
+  if (existingEntries.length > 0 && normDesc) {
+    let bestHistoryScore = 0;
+    let bestHistoryEntry: FinancialEntry | undefined;
+    let bestHistoryAccount: AccountPlanItem | undefined;
+
+    for (const entry of existingEntries) {
+      if (entry.tipo !== tipo || !entry.contaId) continue;
+      const acc = pool.find((a) => a.id === entry.contaId) || accountsPlan.find((a) => a.id === entry.contaId);
+      if (!acc) continue;
+
+      const entryNorm = normalizeForMatch(entry.descricao);
+      if (!entryNorm) continue;
+
+      let score = 0;
+      if (entryNorm === normDesc) {
+        score = 100;
+      } else if (normDesc.length >= 6 && (entryNorm.includes(normDesc) || normDesc.includes(entryNorm))) {
+        score = 40;
+      } else {
+        const entryTokens = extractSignificantTokens(entry.descricao);
+        const common = descTokens.filter((t) => entryTokens.includes(t));
+        const strongCommon = common.filter((t) => t.length >= 4);
+        if (strongCommon.length >= 1 && (common.length >= 2 || strongCommon[0].length >= 5)) {
+          score = common.length * 10 + strongCommon.length * 5;
+        }
+      }
+
+      if (score > bestHistoryScore) {
+        bestHistoryScore = score;
+        bestHistoryEntry = entry;
+        bestHistoryAccount = acc;
+      }
+    }
+
+    if (bestHistoryAccount && bestHistoryEntry && bestHistoryScore >= 15) {
+      return {
+        account: bestHistoryAccount,
+        status: 'historico',
+        reason: `Histórico semelhante ("${bestHistoryEntry.descricao.slice(0, 28)}")`,
+      };
+    }
+  }
+
+  // 2. Correspondência direta com o Plano de Contas editável do usuário (código, nome, descrição, grupo)
+  let bestPlanScore = 0;
+  let bestPlanAcc: AccountPlanItem | undefined;
+  let bestPlanToken = '';
+
+  for (const acc of pool) {
+    const accNormCode = normalizeForMatch(acc.codigo);
+    if (accNormCode && accNormCode.length >= 3 && normDesc.includes(accNormCode)) {
+      return {
+        account: acc,
+        status: 'regra',
+        reason: `Código identificado (${acc.codigo})`,
+      };
+    }
+
+    const nameTokens = extractSignificantTokens(acc.nome);
+    const descExtraTokens = extractSignificantTokens(acc.descricao || '');
+    const groupTokens = extractSignificantTokens(acc.grupo);
+
+    let score = 0;
+    let matchedToken = '';
+
+    for (const tok of nameTokens) {
+      if (tok.length >= 4 && normDesc.includes(tok)) {
+        score += 12;
+        if (!matchedToken) matchedToken = tok;
+      }
+    }
+    for (const tok of descExtraTokens) {
+      if (tok.length >= 4 && normDesc.includes(tok)) {
+        score += 8;
+        if (!matchedToken) matchedToken = tok;
+      }
+    }
+    for (const tok of groupTokens) {
+      if (tok.length >= 5 && normDesc.includes(tok)) {
+        score += 4;
+        if (!matchedToken) matchedToken = tok;
+      }
+    }
+
+    if (score > bestPlanScore) {
+      bestPlanScore = score;
+      bestPlanAcc = acc;
+      bestPlanToken = matchedToken;
+    }
+  }
+
+  if (bestPlanAcc && bestPlanScore >= 12) {
+    return {
+      account: bestPlanAcc,
+      status: 'regra',
+      reason: `Termo "${bestPlanToken}" compatível com o Plano`,
+    };
+  }
+
+  // 3. Regras bancárias e operacionais conhecidas
+  if (tipo === 'despesa') {
+    const rules: Array<{ keywords: string[]; match: string[]; label: string }> = [
+      { keywords: ['ENERGIA', 'CEMIG', 'ENEL', 'CPFL', 'LIGHT', 'COPEL', 'CELESC', 'ELETRIC'], match: ['ENERGIA'], label: 'Energia' },
+      { keywords: ['AGUA', 'COPASA', 'SABESP', 'SANEPAR', 'SANEAGO', 'EMBASA', 'ESGOTO'], match: ['AGUA'], label: 'Água/Esgoto' },
+      { keywords: ['ALUGUEL', 'LOCACAO', 'IMOBILIARIA', 'CONDOMINIO'], match: ['ALUGUEL'], label: 'Aluguel/Imóvel' },
+      { keywords: ['SHAMPOO', 'CERA', 'PRODUTO', 'QUIMICO', 'DESENGRAXANTE', 'SILICONE', 'INSUMO', 'ESTOQUE', 'PRETINHO'], match: ['PRODUTO', 'INSUMO'], label: 'Insumos/Produtos' },
+      { keywords: ['SALARIO', 'FOLHA', 'DIARIA', 'COMISSAO', 'FUNCIONARIO', 'VALE', 'ADIANTAMENTO', 'FGTS', 'INSS', 'PROLABORE'], match: ['FOLHA', 'PAGAMENTO', 'PESSOAL'], label: 'Folha/Pessoal' },
+      { keywords: ['DAS', 'SIMPLES', 'DARF', 'IMPOSTO', 'TRIBUTO', 'ISS', 'IPTU', 'PREFEITURA', 'CONTABIL', 'CONTABILIDADE'], match: ['IMPOSTO', 'DAS', 'TRIBUTO'], label: 'Impostos/Contabilidade' },
+      { keywords: ['TARIFA', 'IOF', 'MANUTENCAO CONTA', 'ANUIDADE', 'CESTA', 'MAQUININHA', 'CIELO', 'STONE', 'PAGSEGURO', 'GETNET', 'REDE'], match: ['TARIFA', 'MAQUININHA', 'BANCAR'], label: 'Tarifa/Maquininha' },
+      { keywords: ['MANUTENCAO', 'BOMBA', 'MANGUEIRA', 'COMPRESSOR', 'OFICINA', 'PECA', 'LAVADORA'], match: ['MANUTENCAO', 'EQUIPAMENTO'], label: 'Manutenção/Equipamentos' },
+      { keywords: ['POSTO', 'COMBUSTIVEL', 'GASOLINA', 'DIESEL', 'ETANOL', 'IPIRANGA', 'SHELL'], match: ['COMBUSTIVEL', 'VEICULO', 'GERAIS'], label: 'Combustível' },
+      { keywords: ['INTERNET', 'VIVO', 'CLARO', 'TIM', 'OI', 'FIBRA', 'TELEFONE'], match: ['INTERNET', 'TELEFONE', 'GERAIS', 'FIXA'], label: 'Telecom/Internet' },
+    ];
+
+    for (const rule of rules) {
+      const hit = rule.keywords.find((kw) => normDesc.includes(kw));
+      if (hit) {
+        const found = pool.find((a) => {
+          const hay = normalizeForMatch(`${a.nome} ${a.grupo} ${a.descricao || ''}`);
+          return rule.match.some((m) => hay.includes(m));
+        });
+        if (found) {
+          return {
+            account: found,
+            status: 'regra',
+            reason: `Identificado "${hit}" (${rule.label})`,
+          };
+        }
+      }
+    }
+  } else {
+    const rules: Array<{ keywords: string[]; match: string[]; label: string }> = [
+      { keywords: ['BOLETO', 'FATURA', 'MENSAL', 'FROTA', 'CONTRATO', 'LIQ TIT'], match: ['FROTA', 'CONTRATO'], label: 'Faturamento Frota/Boleto' },
+      { keywords: ['POLIMENTO', 'HIGIENIZACAO', 'CRISTALIZACAO', 'VITRIFICACAO', 'ESTETICA'], match: ['POLIMENTO', 'HIGIENIZACAO', 'ESTETICA'], label: 'Estética/Polimento' },
+      { keywords: ['RENDIMENTO', 'JUROS', 'POUPANCA', 'CDB', 'RESGATE', 'ESTORNO', 'APLICACAO'], match: ['RENDIMENTO', 'OUTRAS'], label: 'Rendimento/Estorno' },
+      { keywords: ['LAVAGEM', 'DUCHA', 'REDE', 'CIELO', 'STONE', 'GETNET', 'PAGSEGURO', 'CARTAO', 'VENDAS', 'PIX RECEBIDO'], match: ['LAVAGEM', 'SERVICO', 'OPERACIONAIS'], label: 'Recebimento de Serviços' },
+    ];
+
+    for (const rule of rules) {
+      const hit = rule.keywords.find((kw) => normDesc.includes(kw));
+      if (hit) {
+        const found = pool.find((a) => {
+          const hay = normalizeForMatch(`${a.nome} ${a.grupo} ${a.descricao || ''}`);
+          return rule.match.some((m) => hay.includes(m));
+        });
+        if (found) {
+          return {
+            account: found,
+            status: 'regra',
+            reason: `Identificado "${hit}" (${rule.label})`,
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    status: 'pendente',
+    reason: 'Sem correspondência automática — selecione em qual Plano de Contas lançar',
+  };
+};
+
 /**
  * Sugere automaticamente uma conta do Plano de Contas com base no histórico do extrato
  */
 export const suggestAccountForDescription = (
   description: string,
   tipo: 'receita' | 'despesa',
-  accountsPlan: AccountPlanItem[]
+  accountsPlan: AccountPlanItem[],
+  existingEntries: FinancialEntry[] = []
 ): AccountPlanItem | undefined => {
-  const active = accountsPlan.filter((a) => a.ativo && a.tipo === tipo);
-  if (active.length === 0) return accountsPlan.find((a) => a.tipo === tipo);
+  return analyzeStatementLineAccount(description, tipo, accountsPlan, existingEntries).account;
+};
 
-  const upper = description.toUpperCase();
-
-  if (tipo === 'despesa') {
-    const rules: Array<{ keywords: string[]; match: string[] }> = [
-      { keywords: ['ENERGIA', 'CEMIG', 'ENEL', 'CPFL', 'LIGHT', 'ELETRIC'], match: ['ENERGIA'] },
-      { keywords: ['AGUA', 'ÁGUA', 'COPASA', 'SABESP', 'SANEPAR', 'ESGOTO'], match: ['ÁGUA', 'AGUA'] },
-      { keywords: ['ALUGUEL', 'LOCACAO', 'LOCAÇÃO', 'CONDOMINIO'], match: ['ALUGUEL'] },
-      { keywords: ['SHAMPOO', 'CERA', 'PRODUTO', 'QUIMICO', 'QUÍMICO', 'INSUMO', 'ESTOQUE', 'PRETINHO'], match: ['PRODUTO', 'INSUMO'] },
-      { keywords: ['SALARIO', 'SALÁRIO', 'FOLHA', 'DIARIA', 'DIÁRIA', 'COMISSAO', 'FUNCIONARIO', 'VALE'], match: ['FOLHA', 'PAGAMENTO', 'PESSOAL'] },
-      { keywords: ['DAS', 'SIMPLES', 'DARF', 'IMPOSTO', 'TRIBUTO', 'ISS', 'PREFEITURA', 'CONTABIL'], match: ['IMPOSTO', 'DAS'] },
-      { keywords: ['TARIFA', 'IOF', 'MANUTENCAO CONTA', 'ANUIDADE', 'MAQUININHA', 'CIELO', 'STONE', 'PAGSEGURO', 'GETNET'], match: ['TARIFA', 'MAQUININHA'] },
-      { keywords: ['MANUTENCAO', 'MANUTENÇÃO', 'BOMBA', 'MANGUEIRA', 'COMPRESSOR', 'OFICINA', 'PEÇA'], match: ['MANUTENÇÃO', 'EQUIPAMENTO'] },
-      { keywords: ['POSTO', 'COMBUSTIVEL', 'COMBUSTÍVEL', 'GASOLINA', 'DIESEL', 'ETANOL', 'INTERNET', 'VIVO', 'CLARO', 'TIM'], match: ['COMBUSTÍVEL', 'GERAIS'] },
-    ];
-
-    for (const rule of rules) {
-      if (rule.keywords.some((kw) => upper.includes(kw))) {
-        const found = active.find((a) =>
-          rule.match.some((m) => a.nome.toUpperCase().includes(m) || a.grupo.toUpperCase().includes(m))
-        );
-        if (found) return found;
-      }
+/**
+ * Reanalisa linhas já carregadas na pré-visualização que não tenham sido definidas manualmente
+ */
+export const reanalyzeStagingRows = (
+  rows: ParsedBankRow[],
+  accountsPlan: AccountPlanItem[],
+  existingEntries: FinancialEntry[] = []
+): ParsedBankRow[] => {
+  return rows.map((row) => {
+    if (row.analysisStatus === 'manual' || row.analysisStatus === 'explicit') {
+      return row;
     }
-  } else {
-    const rules: Array<{ keywords: string[]; match: string[] }> = [
-      { keywords: ['BOLETO', 'FATURA', 'MENSAL', 'FROTA', 'INOVA', 'TESTATO', 'CONTRATO'], match: ['FROTA', 'CONTRATO'] },
-      { keywords: ['POLIMENTO', 'HIGIENIZACAO', 'HIGIENIZAÇÃO', 'CRISTALIZACAO'], match: ['POLIMENTO', 'HIGIENIZAÇÃO'] },
-      { keywords: ['RENDIMENTO', 'JUROS', 'POUPANCA', 'CDB', 'RESGATE', 'ESTORNO'], match: ['RENDIMENTO', 'OUTRAS'] },
-      { keywords: ['PIX', 'TED', 'DOC', 'DEPOSITO', 'LAVAGEM', 'CARTAO', 'CARTÃO', 'VENDAS'], match: ['LAVAGEM', 'SERVIÇO'] },
-    ];
-
-    for (const rule of rules) {
-      if (rule.keywords.some((kw) => upper.includes(kw))) {
-        const found = active.find((a) =>
-          rule.match.some((m) => a.nome.toUpperCase().includes(m) || a.grupo.toUpperCase().includes(m))
-        );
-        if (found) return found;
-      }
+    const analysis = analyzeStatementLineAccount(row.descricao, row.tipo, accountsPlan, existingEntries);
+    if (analysis.account) {
+      return {
+        ...row,
+        contaId: analysis.account.id,
+        contaNome: analysis.account.nome,
+        grupo: analysis.account.grupo,
+        tipo: analysis.account.tipo,
+        analysisStatus: analysis.status,
+        analysisReason: analysis.reason,
+      };
     }
-  }
-
-  return active[0];
+    return {
+      ...row,
+      contaId: '',
+      contaNome: '',
+      grupo: '',
+      analysisStatus: 'pendente',
+      analysisReason: analysis.reason,
+    };
+  });
 };
 
 const detectPaymentMethod = (desc: string): string => {
@@ -183,21 +439,33 @@ const buildParsedRow = (
   explicitTipo?: 'receita' | 'despesa',
   explicitContaNome?: string,
   explicitObs?: string,
-  camposExtras?: Record<string, string>
+  camposExtras?: Record<string, string>,
+  existingEntries: FinancialEntry[] = []
 ): ParsedBankRow => {
   const tipo: 'receita' | 'despesa' = explicitTipo || (signedAmount >= 0 ? 'receita' : 'despesa');
   const valor = Math.abs(signedAmount);
   const cleanDesc = (descricao || 'LANÇAMENTO BANCÁRIO').trim().toUpperCase();
 
   let matchedAccount: AccountPlanItem | undefined;
+  let analysisStatus: StatementAnalysisStatus = 'pendente';
+  let analysisReason = '';
+
   if (explicitContaNome && explicitContaNome.trim()) {
     const target = explicitContaNome.trim().toUpperCase();
     matchedAccount =
       accountsPlan.find((a) => a.nome.toUpperCase() === target || a.codigo.toUpperCase() === target) ||
       accountsPlan.find((a) => a.nome.toUpperCase().includes(target));
+    if (matchedAccount) {
+      analysisStatus = 'explicit';
+      analysisReason = `Informado na planilha (${matchedAccount.codigo} · ${matchedAccount.nome})`;
+    }
   }
+
   if (!matchedAccount) {
-    matchedAccount = suggestAccountForDescription(cleanDesc, tipo, accountsPlan);
+    const analysis = analyzeStatementLineAccount(cleanDesc, tipo, accountsPlan, existingEntries);
+    matchedAccount = analysis.account;
+    analysisStatus = analysis.status;
+    analysisReason = analysis.reason;
   }
 
   return {
@@ -210,11 +478,13 @@ const buildParsedRow = (
     formaPagamento: detectPaymentMethod(cleanDesc),
     documento: (documento || '').trim().toUpperCase(),
     contaId: matchedAccount?.id || '',
-    contaNome: matchedAccount?.nome || (tipo === 'receita' ? 'RECEITA GERAL' : 'DESPESA GERAL'),
-    grupo: matchedAccount?.grupo || (tipo === 'receita' ? 'RECEITAS' : 'DESPESAS'),
+    contaNome: matchedAccount?.nome || '',
+    grupo: matchedAccount?.grupo || '',
     status: 'Conciliado',
     observacoes: (explicitObs || '').trim().toUpperCase(),
     camposExtras: camposExtras || {},
+    analysisStatus,
+    analysisReason,
   };
 };
 
@@ -224,7 +494,8 @@ const buildParsedRow = (
 export const parseOfxStatement = (
   content: string,
   accountsPlan: AccountPlanItem[],
-  defaultBankName = 'BANCO (OFX)'
+  defaultBankName = 'BANCO (OFX)',
+  existingEntries: FinancialEntry[] = []
 ): ParsedBankRow[] => {
   const rows: ParsedBankRow[] = [];
 
@@ -265,7 +536,11 @@ export const parseOfxStatement = (
           detectedBank,
           fitId,
           accountsPlan,
-          explicitTipo
+          explicitTipo,
+          undefined,
+          undefined,
+          undefined,
+          existingEntries
         )
       );
     }
@@ -281,7 +556,8 @@ const parseMatrixRows = (
   matrix: any[][],
   accountsPlan: AccountPlanItem[],
   customFields: FinancialCustomField[],
-  defaultBankName = 'CONTA CORRENTE'
+  defaultBankName = 'CONTA CORRENTE',
+  existingEntries: FinancialEntry[] = []
 ): ParsedBankRow[] => {
   const nonEmpty = matrix.filter((r) => Array.isArray(r) && r.some((cell) => String(cell ?? '').trim() !== ''));
   if (nonEmpty.length === 0) return [];
@@ -459,7 +735,8 @@ const parseMatrixRows = (
         explicitTipo,
         contaVal,
         obsVal,
-        extras
+        extras,
+        existingEntries
       )
     );
   }
@@ -474,14 +751,15 @@ export const parseTextOrCsvStatement = (
   text: string,
   accountsPlan: AccountPlanItem[],
   customFields: FinancialCustomField[],
-  defaultBankName = 'CONTA CORRENTE'
+  defaultBankName = 'CONTA CORRENTE',
+  existingEntries: FinancialEntry[] = []
 ): ParsedBankRow[] => {
   const trimmed = text.trim();
   if (!trimmed) return [];
 
   // Detecta se é OFX colado em texto
   if (trimmed.includes('<OFX>') || trimmed.includes('<STMTTRN>')) {
-    return parseOfxStatement(trimmed, accountsPlan, defaultBankName);
+    return parseOfxStatement(trimmed, accountsPlan, defaultBankName, existingEntries);
   }
 
   const lines = trimmed
@@ -513,7 +791,7 @@ export const parseTextOrCsvStatement = (
     return line.split(delimiter).map((cell) => cell.replace(/^"|"$/g, '').trim());
   });
 
-  return parseMatrixRows(matrix, accountsPlan, customFields, defaultBankName);
+  return parseMatrixRows(matrix, accountsPlan, customFields, defaultBankName, existingEntries);
 };
 
 /**
@@ -522,18 +800,19 @@ export const parseTextOrCsvStatement = (
 export const parseBankStatementFile = async (
   file: File,
   accountsPlan: AccountPlanItem[],
-  customFields: FinancialCustomField[]
+  customFields: FinancialCustomField[],
+  existingEntries: FinancialEntry[] = []
 ): Promise<ParsedBankRow[]> => {
   const fileName = file.name.toLowerCase();
 
   if (fileName.endsWith('.ofx') || fileName.endsWith('.qfx')) {
     const content = await file.text();
-    return parseOfxStatement(content, accountsPlan, file.name.replace(/\.[^.]+$/, '').toUpperCase());
+    return parseOfxStatement(content, accountsPlan, file.name.replace(/\.[^.]+$/, '').toUpperCase(), existingEntries);
   }
 
   if (fileName.endsWith('.csv') || fileName.endsWith('.txt')) {
     const content = await file.text();
-    return parseTextOrCsvStatement(content, accountsPlan, customFields, 'CONTA CORRENTE');
+    return parseTextOrCsvStatement(content, accountsPlan, customFields, 'CONTA CORRENTE', existingEntries);
   }
 
   // Excel (.xlsx / .xls)
@@ -542,7 +821,7 @@ export const parseBankStatementFile = async (
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!firstSheet) return [];
   const matrix = XLSX.utils.sheet_to_json<any[]>(firstSheet, { header: 1, defval: '' });
-  return parseMatrixRows(matrix, accountsPlan, customFields, 'EXTRATO EXCEL');
+  return parseMatrixRows(matrix, accountsPlan, customFields, 'EXTRATO EXCEL', existingEntries);
 };
 
 /**
@@ -582,6 +861,8 @@ export const buildEditableModelRows = (
       status: 'Conciliado',
       observacoes: 'MODELO EDITÁVEL - CLIQUE PARA ALTERAR OU APAGAR',
       camposExtras: { ...emptyExtras },
+      analysisStatus: recAcc ? 'regra' : 'pendente',
+      analysisReason: recAcc ? `Modelo sugerido (${recAcc.codigo} · ${recAcc.nome})` : 'Selecione o Plano de Contas',
     },
     {
       tempId: `mdl-${Date.now()}-2`,
@@ -598,6 +879,8 @@ export const buildEditableModelRows = (
       status: 'Conciliado',
       observacoes: '',
       camposExtras: { ...emptyExtras },
+      analysisStatus: despInsumo ? 'regra' : 'pendente',
+      analysisReason: despInsumo ? `Modelo sugerido (${despInsumo.codigo} · ${despInsumo.nome})` : 'Selecione o Plano de Contas',
     },
     {
       tempId: `mdl-${Date.now()}-3`,
@@ -614,6 +897,8 @@ export const buildEditableModelRows = (
       status: 'Pendente',
       observacoes: '',
       camposExtras: { ...emptyExtras },
+      analysisStatus: despFixa ? 'regra' : 'pendente',
+      analysisReason: despFixa ? `Modelo sugerido (${despFixa.codigo} · ${despFixa.nome})` : 'Selecione o Plano de Contas',
     },
   ];
 };
