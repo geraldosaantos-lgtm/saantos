@@ -37,6 +37,10 @@ import {
   RotateCcw,
   Percent,
   Sliders,
+  MessageSquare,
+  Send,
+  Loader2,
+  Trash2,
 } from 'lucide-react';
 import {
   buildFinancialAnalysisReport,
@@ -45,6 +49,9 @@ import {
   inferAccountCostNature,
   exportFinancialAnalysisToPDF,
   exportFinancialAnalysisToExcel,
+  buildFinancialQuestionContext,
+  askFinancialAssistantAPI,
+  FinancialChatMessage,
   CostNature,
   COST_NATURE_LABELS,
   EXPENSE_COST_NATURES,
@@ -79,6 +86,9 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
   );
   const [insightFilter, setInsightFilter] = useState<'todos' | 'critico' | 'atencao' | 'positivo'>('todos');
   const [showClassificationEditor, setShowClassificationEditor] = useState(false);
+  const [questionInput, setQuestionInput] = useState('');
+  const [chatMessages, setChatMessages] = useState<FinancialChatMessage[]>([]);
+  const [isAskingAssistant, setIsAskingAssistant] = useState(false);
 
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -399,6 +409,77 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
   const handleResetCostOverrides = () => {
     setCostOverrides({});
     saveAccountCostNatureOverrides({});
+  };
+
+  const quickQuestions = [
+    'Como melhorar meu EBITDA e Margem de Contribuição?',
+    'Quanto falta ou qual minha folga no Ponto de Equilíbrio?',
+    'Quais despesas mais pesam e onde devo cortar primeiro?',
+    'Meu Fluxo de Caixa aguenta os próximos 30 dias?',
+  ];
+
+  const handleAskQuestion = async (rawQuestion?: string) => {
+    const q = (rawQuestion ?? questionInput).trim();
+    if (!q || isAskingAssistant) return;
+
+    const userMsg: FinancialChatMessage = {
+      id: `q-${Date.now()}`,
+      role: 'user',
+      text: q,
+      createdAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    const historyForApi = chatMessages
+      .filter((m) => !m.isError)
+      .slice(-8)
+      .map((m) => ({ role: m.role, text: m.text }));
+
+    setChatMessages((prev) => [...prev, userMsg]);
+    if (!rawQuestion) setQuestionInput('');
+    setIsAskingAssistant(true);
+
+    try {
+      const context = buildFinancialQuestionContext({
+        report: analysisReport,
+        company,
+        periodLabel,
+        bankAccounts,
+        operationalRefRevenue,
+      });
+
+      const answer = await askFinancialAssistantAPI({
+        question: q,
+        history: historyForApi,
+        context,
+      });
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `a-${Date.now()}`,
+          role: 'assistant',
+          text: answer,
+          createdAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível obter resposta do assistente financeiro.';
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `err-${Date.now()}`,
+          role: 'assistant',
+          text: msg,
+          createdAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          isError: true,
+        },
+      ]);
+    } finally {
+      setIsAskingAssistant(false);
+    }
   };
 
   const classificationItems = useMemo(() => {
@@ -1183,6 +1264,145 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                 />
               </div>
             </div>
+          </div>
+
+          {/* Caixa de Perguntas Interativa do Assistente Financeiro Especialista */}
+          <div className="bg-white border border-emerald-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-start gap-2.5">
+                <span className="p-2 bg-emerald-50 text-emerald-700 rounded-xl shrink-0">
+                  <MessageSquare className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-xs sm:text-sm font-extrabold text-neutral-900 uppercase tracking-wider">
+                    Pergunte ao Assistente Financeiro Especialista
+                  </h3>
+                  <p className="text-xs text-neutral-500">
+                    Tire dúvidas sobre EBITDA, Margem de Contribuição, Ponto de Equilíbrio, cortes de custos ou simulações com base nos seus dados reais de <span className="font-semibold text-neutral-700 capitalize">{periodLabel}</span>.
+                  </p>
+                </div>
+              </div>
+
+              {chatMessages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setChatMessages([])}
+                  disabled={isAskingAssistant}
+                  className="px-2.5 py-1.5 text-[11px] font-semibold text-neutral-600 hover:text-rose-700 bg-neutral-100 hover:bg-rose-50 rounded-lg transition-colors flex items-center gap-1 self-start sm:self-auto disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Limpar conversa
+                </button>
+              )}
+            </div>
+
+            {/* Sugestões rápidas */}
+            <div className="flex flex-wrap gap-1.5">
+              {quickQuestions.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  disabled={isAskingAssistant}
+                  onClick={() => handleAskQuestion(suggestion)}
+                  className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-200/80 rounded-xl transition-colors text-left disabled:opacity-50"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+
+            {/* Histórico de Perguntas e Respostas */}
+            {chatMessages.length > 0 && (
+              <div className="space-y-3 max-h-[380px] overflow-y-auto p-3 sm:p-4 bg-neutral-50 border border-neutral-200 rounded-xl">
+                {chatMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+                  >
+                    <div
+                      className={`max-w-[92%] sm:max-w-[82%] rounded-2xl px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed whitespace-pre-wrap ${
+                        msg.role === 'user'
+                          ? 'bg-neutral-900 text-white rounded-br-xs'
+                          : msg.isError
+                          ? 'bg-rose-50 border border-rose-200 text-rose-800 rounded-bl-xs'
+                          : 'bg-white border border-neutral-200 text-neutral-800 shadow-2xs rounded-bl-xs'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-1">
+                        <span
+                          className={`text-[10px] font-extrabold uppercase tracking-wider ${
+                            msg.role === 'user'
+                              ? 'text-emerald-300'
+                              : msg.isError
+                              ? 'text-rose-700'
+                              : 'text-emerald-700'
+                          }`}
+                        >
+                          {msg.role === 'user'
+                            ? 'Você'
+                            : msg.isError
+                            ? 'Aviso do Sistema'
+                            : 'Especialista Financeiro'}
+                        </span>
+                        <span
+                          className={`text-[10px] font-mono ${
+                            msg.role === 'user' ? 'text-neutral-400' : 'text-neutral-400'
+                          }`}
+                        >
+                          {msg.createdAt}
+                        </span>
+                      </div>
+                      <div>{msg.text}</div>
+                    </div>
+                  </div>
+                ))}
+
+                {isAskingAssistant && (
+                  <div className="flex items-start">
+                    <div className="bg-white border border-neutral-200 rounded-2xl rounded-bl-xs px-3.5 py-2.5 text-xs text-neutral-600 flex items-center gap-2 shadow-2xs">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-700" />
+                      Analisando indicadores, DRE e fluxo de caixa...
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Formulário de Pergunta */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleAskQuestion();
+              }}
+              className="flex flex-col sm:flex-row gap-2"
+            >
+              <input
+                type="text"
+                value={questionInput}
+                onChange={(e) => setQuestionInput(e.target.value)}
+                disabled={isAskingAssistant}
+                maxLength={2000}
+                placeholder="Ex.: O que fazer para atingir o Ponto de Equilíbrio mais rápido este mês?"
+                className="flex-1 px-3.5 py-2.5 text-xs sm:text-sm bg-neutral-50 border border-neutral-300 focus:border-emerald-600 focus:bg-white rounded-xl outline-none transition-colors disabled:opacity-60"
+              />
+              <button
+                type="submit"
+                disabled={isAskingAssistant || !questionInput.trim()}
+                className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:bg-neutral-300 text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shrink-0 shadow-xs"
+              >
+                {isAskingAssistant ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Respondendo...
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    Perguntar
+                  </>
+                )}
+              </button>
+            </form>
           </div>
 
           {/* 2. Os 9 Indicadores Financeiros Solicitados */}

@@ -1180,3 +1180,124 @@ export const exportFinancialAnalysisToExcel = (
 
   XLSX.writeFile(wb, `analise-financeira-especialista-${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
+
+export interface FinancialChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+  isError?: boolean;
+}
+
+export const buildFinancialQuestionContext = (params: {
+  report: FinancialAnalysisReport;
+  company: CompanyProfile;
+  periodLabel: string;
+  bankAccounts: BankAccount[];
+  operationalRefRevenue: number;
+}) => {
+  const { report, company, periodLabel, bankAccounts, operationalRefRevenue } = params;
+  return {
+    empresa: company.nomeFantasia || company.razaoSocial || 'AutoLava',
+    periodoAnalisado: periodLabel,
+    faturamentoServicosPatioOS: Number(operationalRefRevenue.toFixed(2)),
+    saudeFinanceira: {
+      score: report.healthScore,
+      status: report.healthStatus,
+      resumoExecutivo: report.resumoExecutivo,
+    },
+    indicadores: {
+      receitaOperacionalBruta: Number(report.receitaBruta.toFixed(2)),
+      deducoesSobreReceita: Number(report.deducoesReceita.toFixed(2)),
+      receitaLiquida: Number(report.receitaLiquida.toFixed(2)),
+      receitasFinanceiras: Number(report.receitasFinanceiras.toFixed(2)),
+      totalReceitasGeral: Number(report.totalReceitasGeral.toFixed(2)),
+      custosVariaveis: Number(report.custosVariaveis.toFixed(2)),
+      indiceCustosVariaveisPct: Number(report.indiceCustosVariaveis.toFixed(2)),
+      custosFixos: Number(report.custosFixos.toFixed(2)),
+      indiceCustosFixosPct: Number(report.indiceCustosFixos.toFixed(2)),
+      margemContribuicaoValor: Number(report.margemContribuicaoValor.toFixed(2)),
+      margemContribuicaoPct: Number(report.margemContribuicaoPct.toFixed(2)),
+      pontoEquilibrioValor: Number(report.pontoEquilibrioValor.toFixed(2)),
+      pontoEquilibrioViavel: report.pontoEquilibrioViavel,
+      faltaParaEquilibrio: Number(report.faltaParaEquilibrio.toFixed(2)),
+      margemSegurancaValor: Number(report.margemSegurancaValor.toFixed(2)),
+      margemSegurancaPct: Number(report.margemSegurancaPct.toFixed(2)),
+      ebitdaValor: Number(report.ebitdaValor.toFixed(2)),
+      ebitdaPct: Number(report.ebitdaPct.toFixed(2)),
+      resultadoOperacionalValor: Number(report.resultadoOperacionalValor.toFixed(2)),
+      resultadoOperacionalPct: Number(report.resultadoOperacionalPct.toFixed(2)),
+      depreciacaoAmortizacao: Number(report.depreciacaoAmortizacao.toFixed(2)),
+      despesasFinanceiras: Number(report.despesasFinanceiras.toFixed(2)),
+      investimentosCapex: Number(report.investimentos.toFixed(2)),
+      totalDespesasGeral: Number(report.totalDespesasGeral.toFixed(2)),
+      pctDespesasSobreReceita: Number(report.pctDespesasSobreReceita.toFixed(2)),
+      saldoLiquidoFinal: Number(report.saldoLiquidoFinal.toFixed(2)),
+    },
+    fluxoCaixaProjetado: {
+      saldoAtualBancos: Number(report.fluxoCaixa.saldoAtualBancos.toFixed(2)),
+      receitasPendentesTotal: Number(report.fluxoCaixa.receitasPendentesTotal.toFixed(2)),
+      despesasPendentesTotal: Number(report.fluxoCaixa.despesasPendentesTotal.toFixed(2)),
+      saldoAposPendencias: Number(report.fluxoCaixa.saldoAposPendencias.toFixed(2)),
+      mediaDiariaReceita30d: Number(report.fluxoCaixa.mediaDiariaReceita30d.toFixed(2)),
+      mediaDiariaDespesa30d: Number(report.fluxoCaixa.mediaDiariaDespesa30d.toFixed(2)),
+      mediaDiariaLiquida30d: Number(report.fluxoCaixa.mediaDiariaLiquida30d.toFixed(2)),
+      projecao30Dias: Number(report.fluxoCaixa.projecao30Dias.toFixed(2)),
+      diasDeCaixa: report.fluxoCaixa.diasDeCaixa,
+    },
+    contasBancariasAtivas: bankAccounts
+      .filter((b) => b.ativo)
+      .map((b) => `${b.nome} (${b.banco} - ${b.tipoConta})`),
+    dreGerencial: report.dreLines.map((line) => ({
+      linha: line.label,
+      valor: Number(line.valor.toFixed(2)),
+      percentualAV: line.pctReceita !== null ? Number(line.pctReceita.toFixed(2)) : null,
+    })),
+    principaisContasMovimentadas: report.accountBreakdown.slice(0, 20).map((item) => ({
+      tipo: item.tipo,
+      natureza: COST_NATURE_LABELS[item.nature],
+      conta: item.nome,
+      grupo: item.grupo,
+      total: Number(item.total.toFixed(2)),
+      qtdLancamentos: item.count,
+      pctSobreReceita: Number(item.pctSobreReceita.toFixed(2)),
+    })),
+    pontosObservadosEDicas: report.insights.map((ins) => ({
+      nivel: ins.nivel,
+      categoria: ins.categoria,
+      titulo: ins.titulo,
+      observacao: ins.observacao,
+      acaoRecomendada: ins.acaoRecomendada,
+    })),
+  };
+};
+
+export const askFinancialAssistantAPI = async (params: {
+  question: string;
+  history: Array<{ role: 'user' | 'assistant'; text: string }>;
+  context: Record<string, unknown>;
+}): Promise<string> => {
+  const response = await fetch('/api/financial-assistant/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as {
+    answer?: string;
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(
+      data.error || `Erro ao consultar o assistente financeiro (código ${response.status}).`
+    );
+  }
+
+  if (!data.answer || typeof data.answer !== 'string') {
+    throw new Error('Resposta vazia recebida do assistente financeiro.');
+  }
+
+  return data.answer;
+};
+
