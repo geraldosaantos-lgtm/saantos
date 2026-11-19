@@ -9,6 +9,7 @@ import {
   AccountPlanItem,
   FinancialEntry,
   FinancialCustomField,
+  BankAccount,
 } from '../types';
 import {
   AppState,
@@ -231,10 +232,11 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
 
     // 6. Módulo Financeiro (consultado separadamente para não quebrar se as tabelas ainda não tiverem sido criadas no Supabase)
     try {
-      const [accRes, finRes, cfRes] = await Promise.all([
+      const [accRes, finRes, cfRes, bankRes] = await Promise.all([
         supabase.from('accounts_plan').select('*').order('codigo', { ascending: true }),
         supabase.from('financial_entries').select('*').order('data', { ascending: false }),
         supabase.from('financial_custom_fields').select('*'),
+        supabase.from('bank_accounts').select('*').order('nome', { ascending: true }),
       ]);
 
       if (!accRes.error && Array.isArray(accRes.data) && accRes.data.length > 0) {
@@ -260,6 +262,7 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
           grupo: (f.grupo || '').toUpperCase(),
           valor: Math.abs(Number(f.valor) || 0),
           banco: (f.banco || 'CAIXA').toUpperCase(),
+          bancoId: f.banco_id || '',
           formaPagamento: (f.forma_pagamento || '').toUpperCase(),
           documento: (f.documento || '').toUpperCase(),
           status: f.status === 'Pendente' ? 'Pendente' : 'Conciliado',
@@ -277,6 +280,22 @@ export async function fetchStateFromSupabase(): Promise<Partial<AppState> | null
           tipo: cf.tipo || 'texto',
           opcoes: Array.isArray(cf.opcoes) ? cf.opcoes : [],
           ativo: cf.ativo !== false,
+        }));
+      }
+
+      if (!bankRes.error && Array.isArray(bankRes.data) && bankRes.data.length > 0) {
+        state.bankAccounts = bankRes.data.map((b: any) => ({
+          id: b.id,
+          nome: (b.nome || '').toUpperCase(),
+          banco: (b.banco || b.nome || '').toUpperCase(),
+          agencia: (b.agencia || '').toUpperCase(),
+          numeroConta: (b.numero_conta || '').toUpperCase(),
+          tipoConta: b.tipo_conta || 'Conta Corrente',
+          saldoInicial: Number(b.saldo_inicial) || 0,
+          dataSaldoInicial: b.data_saldo_inicial || '2026-01-01',
+          chavePix: b.chave_pix || '',
+          observacoes: (b.observacoes || '').toUpperCase(),
+          ativo: b.ativo !== false,
         }));
       }
     } catch {
@@ -602,28 +621,39 @@ export async function syncFinancialEntryToSupabase(entry: FinancialEntry): Promi
   const supabase = getSupabaseClient();
   if (!supabase) return false;
   try {
-    const { error } = await supabase.from('financial_entries').upsert(
+    const basePayload = {
+      id: entry.id,
+      data: entry.data,
+      descricao: (entry.descricao || '').toUpperCase(),
+      tipo: entry.tipo,
+      conta_id: entry.contaId || '',
+      conta_nome: (entry.contaNome || '').toUpperCase(),
+      grupo: (entry.grupo || '').toUpperCase(),
+      valor: Math.abs(Number(entry.valor) || 0),
+      banco: (entry.banco || 'CAIXA').toUpperCase(),
+      forma_pagamento: (entry.formaPagamento || '').toUpperCase(),
+      documento: (entry.documento || '').toUpperCase(),
+      status: entry.status || 'Conciliado',
+      origem: entry.origem || 'manual',
+      observacoes: (entry.observacoes || '').toUpperCase(),
+      campos_extras: entry.camposExtras || {},
+      criado_em: entry.criadoEm || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    let { error } = await supabase.from('financial_entries').upsert(
       {
-        id: entry.id,
-        data: entry.data,
-        descricao: (entry.descricao || '').toUpperCase(),
-        tipo: entry.tipo,
-        conta_id: entry.contaId || '',
-        conta_nome: (entry.contaNome || '').toUpperCase(),
-        grupo: (entry.grupo || '').toUpperCase(),
-        valor: Math.abs(Number(entry.valor) || 0),
-        banco: (entry.banco || 'CAIXA').toUpperCase(),
-        forma_pagamento: (entry.formaPagamento || '').toUpperCase(),
-        documento: (entry.documento || '').toUpperCase(),
-        status: entry.status || 'Conciliado',
-        origem: entry.origem || 'manual',
-        observacoes: (entry.observacoes || '').toUpperCase(),
-        campos_extras: entry.camposExtras || {},
-        criado_em: entry.criadoEm || new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        ...basePayload,
+        banco_id: entry.bancoId || '',
       },
       { onConflict: 'id' }
     );
+
+    if (error && (error.code === '42703' || error.message?.includes('banco_id'))) {
+      const retry = await supabase.from('financial_entries').upsert(basePayload, { onConflict: 'id' });
+      error = retry.error;
+    }
+
     return !error;
   } catch {
     return false;
@@ -673,6 +703,44 @@ export async function deleteFinancialCustomFieldFromSupabase(fieldId: string): P
   }
 }
 
+export async function syncBankAccountToSupabase(account: BankAccount): Promise<boolean> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from('bank_accounts').upsert(
+      {
+        id: account.id,
+        nome: (account.nome || '').toUpperCase(),
+        banco: (account.banco || account.nome || '').toUpperCase(),
+        agencia: (account.agencia || '').toUpperCase(),
+        numero_conta: (account.numeroConta || '').toUpperCase(),
+        tipo_conta: account.tipoConta || 'Conta Corrente',
+        saldo_inicial: Number(account.saldoInicial) || 0,
+        data_saldo_inicial: account.dataSaldoInicial || '2026-01-01',
+        chave_pix: account.chavePix || '',
+        observacoes: (account.observacoes || '').toUpperCase(),
+        ativo: account.ativo !== false,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteBankAccountFromSupabase(bankId: string): Promise<boolean> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from('bank_accounts').delete().eq('id', bankId);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 // Exportar todos os dados locais para o Supabase (carga inicial / migração)
 export async function uploadAllLocalDataToSupabase(state: AppState): Promise<{
   success: boolean;
@@ -710,6 +778,9 @@ export async function uploadAllLocalDataToSupabase(state: AppState): Promise<{
     // 6. Financeiro (opcional se tabelas existirem)
     for (const acc of state.accountsPlan || []) {
       await syncAccountPlanToSupabase(acc);
+    }
+    for (const bank of state.bankAccounts || []) {
+      await syncBankAccountToSupabase(bank);
     }
     for (const cf of state.financialCustomFields || []) {
       await syncFinancialCustomFieldToSupabase(cf);

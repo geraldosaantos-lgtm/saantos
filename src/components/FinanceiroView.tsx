@@ -5,6 +5,8 @@ import {
   FinancialEntry,
   FinancialCustomField,
   CustomFieldInputType,
+  BankAccount,
+  BankAccountType,
 } from '../types';
 import { formatCurrency, parseLaunchDate, getWeekRange } from '../utils/storage';
 import {
@@ -14,6 +16,8 @@ import {
   buildEditableModelRows,
   downloadStatementTemplateExcel,
   exportFinancialEntriesToExcel,
+  exportAccountsPlanToExcel,
+  parseAccountsPlanFile,
 } from '../utils/bankStatementParser';
 import { ConfirmModal } from './ConfirmModal';
 import {
@@ -38,25 +42,34 @@ import {
   AlertCircle,
   Save,
   RotateCcw,
+  Copy,
+  CreditCard,
+  ArrowRight,
 } from 'lucide-react';
 
 interface FinanceiroViewProps {
   entries: FinancialEntry[];
   accountsPlan: AccountPlanItem[];
   customFields: FinancialCustomField[];
-  initialSubTab?: 'movimentacoes' | 'extrato' | 'plano';
+  bankAccounts: BankAccount[];
+  initialSubTab?: 'movimentacoes' | 'extrato' | 'bancos' | 'plano';
   onSaveEntry: (entry: FinancialEntry) => void;
   onSaveEntriesBatch: (entries: FinancialEntry[]) => void;
   onDeleteEntry: (id: string) => void;
   onDeleteEntriesBatch: (ids: string[]) => void;
   onSaveAccount: (account: AccountPlanItem) => void;
+  onSaveAccountsBatch?: (accounts: AccountPlanItem[]) => void;
   onDeleteAccount: (id: string) => void;
+  onDeleteAccountsBatch?: (ids: string[]) => void;
   onRestoreDefaultAccounts?: () => void;
   onSaveCustomField: (field: FinancialCustomField) => void;
   onDeleteCustomField: (id: string) => void;
+  onSaveBankAccount: (account: BankAccount) => void;
+  onDeleteBankAccount: (id: string) => void;
+  onRestoreDefaultBankAccounts?: () => void;
 }
 
-type SubTab = 'movimentacoes' | 'extrato' | 'plano';
+type SubTab = 'movimentacoes' | 'extrato' | 'bancos' | 'plano';
 type FilterPeriod = 'mes' | 'mes_anterior' | 'hoje' | 'semana' | 'todos' | 'personalizado';
 
 const PAYMENT_METHODS = [
@@ -70,20 +83,49 @@ const PAYMENT_METHODS = [
   'TARIFA BANCÁRIA',
 ];
 
+const BANK_SUGGESTIONS = [
+  'SICREDI / 748',
+  'BANCO DO BRASIL / 001',
+  'ITAÚ / 341',
+  'BRADESCO / 237',
+  'CAIXA ECONÔMICA / 104',
+  'SANTANDER / 033',
+  'SICOOB / 756',
+  'BANCO INTER / 077',
+  'NUBANK / 260',
+  'MERCADO PAGO',
+  'STONE / PAGSEGURO',
+  'CAIXA FÍSICO (ESPÉCIE)',
+];
+
+const BANK_ACCOUNT_TYPES: BankAccountType[] = [
+  'Conta Corrente',
+  'Caixa Físico',
+  'Poupança',
+  'Carteira Digital',
+  'Investimento',
+];
+
 export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   entries,
   accountsPlan,
   customFields,
+  bankAccounts,
   initialSubTab = 'movimentacoes',
   onSaveEntry,
   onSaveEntriesBatch,
   onDeleteEntry,
   onDeleteEntriesBatch,
   onSaveAccount,
+  onSaveAccountsBatch,
   onDeleteAccount,
+  onDeleteAccountsBatch,
   onRestoreDefaultAccounts,
   onSaveCustomField,
   onDeleteCustomField,
+  onSaveBankAccount,
+  onDeleteBankAccount,
+  onRestoreDefaultBankAccounts,
 }) => {
   const [subTab, setSubTab] = useState<SubTab>(initialSubTab);
 
@@ -97,6 +139,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTipo, setFilterTipo] = useState<'todos' | 'receita' | 'despesa'>('todos');
   const [filterContaId, setFilterContaId] = useState<string>('todas');
+  const [filterBanco, setFilterBanco] = useState<string>('todos');
   const [filterStatus, setFilterStatus] = useState<'todos' | 'Conciliado' | 'Pendente'>('todos');
   const [filterPeriod, setFilterPeriod] = useState<FilterPeriod>('mes');
   const [customStart, setCustomStart] = useState(() => {
@@ -114,6 +157,30 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineDraft, setInlineDraft] = useState<FinancialEntry | null>(null);
 
+  // Contas Bancárias
+  const defaultActiveBank = useMemo(
+    () => bankAccounts.find((b) => b.ativo) || bankAccounts[0],
+    [bankAccounts]
+  );
+  const [bankSearch, setBankSearch] = useState('');
+  const [bankFilterStatus, setBankFilterStatus] = useState<'todas' | 'ativas' | 'inativas'>('todas');
+  const [isBankModalOpen, setIsBankModalOpen] = useState(false);
+  const [editingBank, setEditingBank] = useState<BankAccount | null>(null);
+  const [bankForm, setBankForm] = useState<Omit<BankAccount, 'id'>>({
+    nome: '',
+    banco: '',
+    agencia: '',
+    numeroConta: '',
+    tipoConta: 'Conta Corrente',
+    saldoInicial: 0,
+    dataSaldoInicial: new Date().toISOString().slice(0, 10),
+    chavePix: '',
+    observacoes: '',
+    ativo: true,
+  });
+  const [bankToDelete, setBankToDelete] = useState<BankAccount | null>(null);
+  const [selectNewBankForEntry, setSelectNewBankForEntry] = useState(false);
+
   // Modal de Lançamento Financeiro (Novo / Editar Completo)
   const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<FinancialEntry | null>(null);
@@ -125,7 +192,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     contaNome: '',
     grupo: '',
     valor: 0,
-    banco: 'SICREDI',
+    banco: defaultActiveBank?.nome || 'SICREDI',
+    bancoId: defaultActiveBank?.id || '',
     formaPagamento: 'PIX',
     documento: '',
     status: 'Conciliado',
@@ -137,15 +205,44 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
   // Extrato Bancário (Importação & Staging Editável)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [bankDefaultName, setBankDefaultName] = useState('SICREDI');
+  const [selectedExtratoBankId, setSelectedExtratoBankId] = useState<string>(defaultActiveBank?.id || '');
+  const [bankDefaultName, setBankDefaultName] = useState(defaultActiveBank?.nome || 'SICREDI');
   const [pastedText, setPastedText] = useState('');
   const [stagingRows, setStagingRows] = useState<ParsedBankRow[]>([]);
   const [importFeedback, setImportFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [stagingBulkContaId, setStagingBulkContaId] = useState('');
 
-  // Plano de Contas
+  useEffect(() => {
+    if (selectedExtratoBankId) {
+      const found = bankAccounts.find((b) => b.id === selectedExtratoBankId);
+      if (found) setBankDefaultName(found.nome);
+    } else if (!bankDefaultName && defaultActiveBank) {
+      setSelectedExtratoBankId(defaultActiveBank.id);
+      setBankDefaultName(defaultActiveBank.nome);
+    }
+  }, [bankAccounts, selectedExtratoBankId, defaultActiveBank]);
+
+  // Plano de Contas (Totalmente Editável Inline na Tela + Import/Export)
+  const planFileInputRef = useRef<HTMLInputElement | null>(null);
   const [planFilterTipo, setPlanFilterTipo] = useState<'todos' | 'receita' | 'despesa'>('todos');
   const [planSearch, setPlanSearch] = useState('');
+  const [planDrafts, setPlanDrafts] = useState<Record<string, AccountPlanItem>>({});
+  const [dirtyPlanIds, setDirtyPlanIds] = useState<string[]>([]);
+  const [selectedPlanIds, setSelectedPlanIds] = useState<string[]>([]);
+  const [confirmPlanBulkDelete, setConfirmPlanBulkDelete] = useState(false);
+  const [quickNewAccount, setQuickNewAccount] = useState<{
+    codigo: string;
+    tipo: AccountPlanType;
+    grupo: string;
+    nome: string;
+    descricao: string;
+  }>({
+    codigo: '',
+    tipo: 'despesa',
+    grupo: 'DESPESAS OPERACIONAIS',
+    nome: '',
+    descricao: '',
+  });
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<AccountPlanItem | null>(null);
   const [accountForm, setAccountForm] = useState<Omit<AccountPlanItem, 'id'>>({
@@ -157,6 +254,18 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     ativo: true,
   });
   const [accountToDelete, setAccountToDelete] = useState<AccountPlanItem | null>(null);
+
+  // Mantém rascunhos locais sincronizados com accountsPlan sem perder edições ainda não salvas
+  useEffect(() => {
+    setPlanDrafts((prev) => {
+      const dirtySet = new Set(dirtyPlanIds);
+      const next: Record<string, AccountPlanItem> = {};
+      accountsPlan.forEach((acc) => {
+        next[acc.id] = dirtySet.has(acc.id) && prev[acc.id] ? prev[acc.id] : { ...acc };
+      });
+      return next;
+    });
+  }, [accountsPlan]);
 
   // Gerenciador de Campos Personalizados Editáveis
   const [isFieldsModalOpen, setIsFieldsModalOpen] = useState(false);
@@ -179,6 +288,93 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   const prevMonthPrefix = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
   const { start: weekStart, end: weekEnd } = getWeekRange(now);
 
+  // Calcula saldos reais de cada Conta Bancária cadastrada
+  const bankBalancesMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        entradasConciliadas: number;
+        saidasConciliadas: number;
+        entradasPendentes: number;
+        saidasPendentes: number;
+        saldoAtual: number;
+        saldoPrevisto: number;
+        count: number;
+      }
+    >();
+
+    bankAccounts.forEach((bank) => {
+      map.set(bank.id, {
+        entradasConciliadas: 0,
+        saidasConciliadas: 0,
+        entradasPendentes: 0,
+        saidasPendentes: 0,
+        saldoAtual: Number(bank.saldoInicial) || 0,
+        saldoPrevisto: Number(bank.saldoInicial) || 0,
+        count: 0,
+      });
+    });
+
+    entries.forEach((e) => {
+      const matchedBank =
+        (e.bancoId ? bankAccounts.find((b) => b.id === e.bancoId) : undefined) ||
+        bankAccounts.find((b) => b.nome.trim().toUpperCase() === (e.banco || '').trim().toUpperCase());
+
+      if (!matchedBank) return;
+      if (matchedBank.dataSaldoInicial && e.data && e.data < matchedBank.dataSaldoInicial) return;
+
+      const stat = map.get(matchedBank.id);
+      if (!stat) return;
+      const val = Math.abs(Number(e.valor) || 0);
+      stat.count += 1;
+
+      if (e.status === 'Pendente') {
+        if (e.tipo === 'receita') stat.entradasPendentes += val;
+        else stat.saidasPendentes += val;
+      } else {
+        if (e.tipo === 'receita') stat.entradasConciliadas += val;
+        else stat.saidasConciliadas += val;
+      }
+    });
+
+    bankAccounts.forEach((bank) => {
+      const stat = map.get(bank.id)!;
+      const base = Number(bank.saldoInicial) || 0;
+      stat.saldoAtual = base + stat.entradasConciliadas - stat.saidasConciliadas;
+      stat.saldoPrevisto = stat.saldoAtual + stat.entradasPendentes - stat.saidasPendentes;
+    });
+
+    return map;
+  }, [bankAccounts, entries]);
+
+  const consolidatedBankTotals = useMemo(() => {
+    let saldoAtualTotal = 0;
+    let saldoPrevistoTotal = 0;
+    let ativas = 0;
+    bankAccounts.forEach((b) => {
+      if (!b.ativo) return;
+      ativas += 1;
+      const st = bankBalancesMap.get(b.id);
+      if (st) {
+        saldoAtualTotal += st.saldoAtual;
+        saldoPrevistoTotal += st.saldoPrevisto;
+      }
+    });
+    return { saldoAtualTotal, saldoPrevistoTotal, ativas };
+  }, [bankAccounts, bankBalancesMap]);
+
+  const legacyUnregisteredBankNames = useMemo(() => {
+    const regNames = new Set(bankAccounts.map((b) => b.nome.trim().toUpperCase()));
+    const set = new Set<string>();
+    entries.forEach((e) => {
+      const name = (e.banco || '').trim().toUpperCase();
+      if (name && !regNames.has(name) && !e.bancoId) {
+        set.add(name);
+      }
+    });
+    return Array.from(set).sort();
+  }, [bankAccounts, entries]);
+
   // Movimentações filtradas
   const filteredEntries = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -187,6 +383,22 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         if (filterTipo !== 'todos' && e.tipo !== filterTipo) return false;
         if (filterContaId !== 'todas' && e.contaId !== filterContaId && e.contaNome !== filterContaId) return false;
         if (filterStatus !== 'todos' && e.status !== filterStatus) return false;
+
+        if (filterBanco !== 'todos') {
+          if (filterBanco.startsWith('bank:')) {
+            const targetId = filterBanco.slice(5);
+            const targetBank = bankAccounts.find((b) => b.id === targetId);
+            const matchById = e.bancoId === targetId;
+            const matchByName =
+              targetBank &&
+              !e.bancoId &&
+              (e.banco || '').trim().toUpperCase() === targetBank.nome.trim().toUpperCase();
+            if (!matchById && !matchByName) return false;
+          } else if (filterBanco.startsWith('name:')) {
+            const targetName = filterBanco.slice(5);
+            if ((e.banco || '').trim().toUpperCase() !== targetName) return false;
+          }
+        }
 
         if (filterPeriod === 'hoje' && e.data !== todayStr) return false;
         if (filterPeriod === 'mes' && !e.data.startsWith(currentMonthPrefix)) return false;
@@ -221,6 +433,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     searchTerm,
     filterTipo,
     filterContaId,
+    filterBanco,
     filterStatus,
     filterPeriod,
     customStart,
@@ -230,6 +443,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     prevMonthPrefix,
     weekStart,
     weekEnd,
+    bankAccounts,
   ]);
 
   const filteredSummary = useMemo(() => {
@@ -262,11 +476,88 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     return map;
   }, [entries]);
 
+  // Handlers de Contas Bancárias
+  const openNewBankModal = (forEntry = false) => {
+    setEditingBank(null);
+    setSelectNewBankForEntry(forEntry);
+    setBankForm({
+      nome: '',
+      banco: '',
+      agencia: '',
+      numeroConta: '',
+      tipoConta: 'Conta Corrente',
+      saldoInicial: 0,
+      dataSaldoInicial: todayStr,
+      chavePix: '',
+      observacoes: '',
+      ativo: true,
+    });
+    setIsBankModalOpen(true);
+  };
+
+  const openEditBankModal = (bank: BankAccount) => {
+    setEditingBank(bank);
+    setSelectNewBankForEntry(false);
+    setBankForm({
+      nome: bank.nome,
+      banco: bank.banco,
+      agencia: bank.agencia,
+      numeroConta: bank.numeroConta,
+      tipoConta: bank.tipoConta,
+      saldoInicial: bank.saldoInicial,
+      dataSaldoInicial: bank.dataSaldoInicial || todayStr,
+      chavePix: bank.chavePix || '',
+      observacoes: bank.observacoes || '',
+      ativo: bank.ativo,
+    });
+    setIsBankModalOpen(true);
+  };
+
+  const handleSaveBankModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bankForm.nome.trim()) return;
+    const saved: BankAccount = {
+      id: editingBank ? editingBank.id : `bank-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      nome: bankForm.nome.trim().toUpperCase(),
+      banco: (bankForm.banco.trim() || bankForm.nome.trim()).toUpperCase(),
+      agencia: (bankForm.agencia || '').trim().toUpperCase(),
+      numeroConta: (bankForm.numeroConta || '').trim().toUpperCase(),
+      tipoConta: bankForm.tipoConta || 'Conta Corrente',
+      saldoInicial: Number(bankForm.saldoInicial) || 0,
+      dataSaldoInicial: bankForm.dataSaldoInicial || todayStr,
+      chavePix: (bankForm.chavePix || '').trim(),
+      observacoes: (bankForm.observacoes || '').trim().toUpperCase(),
+      ativo: bankForm.ativo,
+    };
+    onSaveBankAccount(saved);
+    if (selectNewBankForEntry) {
+      setEntryForm((prev) => ({
+        ...prev,
+        banco: saved.nome,
+        bancoId: saved.id,
+      }));
+    }
+    if (subTab === 'extrato' || !selectedExtratoBankId) {
+      setSelectedExtratoBankId(saved.id);
+      setBankDefaultName(saved.nome);
+    }
+    setIsBankModalOpen(false);
+    setSelectNewBankForEntry(false);
+    setImportFeedback({
+      type: 'success',
+      msg: `Conta bancária "${saved.nome}" salva com sucesso!`,
+    });
+  };
+
   // Handlers de Lançamento Financeiro (Manual / Modal)
-  const openNewEntryModal = (defaultTipo: AccountPlanType = 'despesa') => {
+  const openNewEntryModal = (defaultTipo: AccountPlanType = 'despesa', presetBank?: BankAccount) => {
     const firstAcc =
       accountsPlan.find((a) => a.ativo && a.tipo === defaultTipo) ||
       accountsPlan.find((a) => a.tipo === defaultTipo);
+    const chosenBank =
+      presetBank ||
+      bankAccounts.find((b) => b.id === selectedExtratoBankId) ||
+      defaultActiveBank;
     setEditingEntry(null);
     setEntryForm({
       data: new Date().toISOString().slice(0, 10),
@@ -276,8 +567,9 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       contaNome: firstAcc?.nome || '',
       grupo: firstAcc?.grupo || '',
       valor: 0,
-      banco: bankDefaultName || 'SICREDI',
-      formaPagamento: 'PIX',
+      banco: chosenBank?.nome || bankDefaultName || 'CAIXA',
+      bancoId: chosenBank?.id || '',
+      formaPagamento: chosenBank?.tipoConta === 'Caixa Físico' ? 'DINHEIRO' : 'PIX',
       documento: '',
       status: 'Conciliado',
       origem: 'manual',
@@ -288,6 +580,9 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   };
 
   const openEditEntryModal = (entry: FinancialEntry) => {
+    const matchedBank =
+      (entry.bancoId ? bankAccounts.find((b) => b.id === entry.bancoId) : undefined) ||
+      bankAccounts.find((b) => b.nome.trim().toUpperCase() === (entry.banco || '').trim().toUpperCase());
     setEditingEntry(entry);
     setEntryForm({
       data: entry.data,
@@ -297,7 +592,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       contaNome: entry.contaNome,
       grupo: entry.grupo,
       valor: entry.valor,
-      banco: entry.banco,
+      banco: matchedBank?.nome || entry.banco,
+      bancoId: matchedBank?.id || entry.bancoId || '',
       formaPagamento: entry.formaPagamento || 'PIX',
       documento: entry.documento || '',
       status: entry.status,
@@ -312,6 +608,9 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     e.preventDefault();
     if (!entryForm.descricao.trim()) return;
     const acc = accountsPlan.find((a) => a.id === entryForm.contaId);
+    const matchedBank =
+      (entryForm.bancoId ? bankAccounts.find((b) => b.id === entryForm.bancoId) : undefined) ||
+      bankAccounts.find((b) => b.nome.trim().toUpperCase() === (entryForm.banco || '').trim().toUpperCase());
     const saved: FinancialEntry = {
       id: editingEntry ? editingEntry.id : `fin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       data: entryForm.data || todayStr,
@@ -321,7 +620,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       contaNome: (acc?.nome || entryForm.contaNome || (entryForm.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS')).toUpperCase(),
       grupo: (acc?.grupo || entryForm.grupo || 'GERAL').toUpperCase(),
       valor: Math.abs(Number(entryForm.valor) || 0),
-      banco: (entryForm.banco || 'CAIXA').trim().toUpperCase(),
+      banco: (matchedBank?.nome || entryForm.banco || 'CAIXA').trim().toUpperCase(),
+      bancoId: matchedBank?.id || entryForm.bancoId || '',
       formaPagamento: (entryForm.formaPagamento || '').trim().toUpperCase(),
       documento: (entryForm.documento || '').trim().toUpperCase(),
       status: entryForm.status,
@@ -336,20 +636,31 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
   // Edição Inline Rápida
   const startInlineEdit = (entry: FinancialEntry) => {
+    const matchedBank =
+      (entry.bancoId ? bankAccounts.find((b) => b.id === entry.bancoId) : undefined) ||
+      bankAccounts.find((b) => b.nome.trim().toUpperCase() === (entry.banco || '').trim().toUpperCase());
     setInlineEditId(entry.id);
-    setInlineDraft({ ...entry, camposExtras: { ...(entry.camposExtras || {}) } });
+    setInlineDraft({
+      ...entry,
+      bancoId: matchedBank?.id || entry.bancoId || '',
+      camposExtras: { ...(entry.camposExtras || {}) },
+    });
   };
 
   const saveInlineEdit = () => {
     if (!inlineDraft) return;
     const acc = accountsPlan.find((a) => a.id === inlineDraft.contaId);
+    const matchedBank =
+      (inlineDraft.bancoId ? bankAccounts.find((b) => b.id === inlineDraft.bancoId) : undefined) ||
+      bankAccounts.find((b) => b.nome.trim().toUpperCase() === (inlineDraft.banco || '').trim().toUpperCase());
     onSaveEntry({
       ...inlineDraft,
       descricao: inlineDraft.descricao.trim().toUpperCase(),
       contaNome: (acc?.nome || inlineDraft.contaNome).toUpperCase(),
       grupo: (acc?.grupo || inlineDraft.grupo).toUpperCase(),
       valor: Math.abs(Number(inlineDraft.valor) || 0),
-      banco: (inlineDraft.banco || 'CAIXA').trim().toUpperCase(),
+      banco: (matchedBank?.nome || inlineDraft.banco || 'CAIXA').trim().toUpperCase(),
+      bancoId: matchedBank?.id || inlineDraft.bancoId || '',
       documento: (inlineDraft.documento || '').trim().toUpperCase(),
       observacoes: (inlineDraft.observacoes || '').trim().toUpperCase(),
     });
@@ -411,10 +722,22 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
           msg: 'Não foi possível identificar movimentações no arquivo. Verifique se possui colunas de Data, Descrição e Valor.',
         });
       } else {
-        const withBank = parsed.map((row) => ({
-          ...row,
-          banco: row.banco === 'CONTA CORRENTE' || row.banco === 'EXTRATO EXCEL' ? bankDefaultName.toUpperCase() : row.banco,
-        }));
+        const chosenBank = bankAccounts.find((b) => b.id === selectedExtratoBankId);
+        const withBank = parsed.map((row) => {
+          const useSelected =
+            !!chosenBank ||
+            row.banco === 'CONTA CORRENTE' ||
+            row.banco === 'EXTRATO EXCEL';
+          const bankName = chosenBank ? chosenBank.nome : useSelected ? bankDefaultName.toUpperCase() : row.banco;
+          const bankMatch =
+            chosenBank ||
+            bankAccounts.find((b) => b.nome.trim().toUpperCase() === bankName.trim().toUpperCase());
+          return {
+            ...row,
+            banco: bankName,
+            bancoId: bankMatch?.id || '',
+          };
+        });
         setStagingRows((prev) => [...prev, ...withBank]);
         setImportFeedback({
           type: 'success',
@@ -433,11 +756,12 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
   const handleProcessPastedText = () => {
     if (!pastedText.trim()) return;
+    const chosenBank = bankAccounts.find((b) => b.id === selectedExtratoBankId);
     const parsed = parseTextOrCsvStatement(
       pastedText,
       accountsPlan,
       customFields,
-      bankDefaultName.toUpperCase() || 'EXTRATO BANCÁRIO'
+      chosenBank?.nome || bankDefaultName.toUpperCase() || 'EXTRATO BANCÁRIO'
     );
     if (parsed.length === 0) {
       setImportFeedback({
@@ -445,7 +769,12 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         msg: 'Nenhuma linha válida identificada no texto colado. Use o formato: Data | Descrição | Valor.',
       });
     } else {
-      setStagingRows((prev) => [...prev, ...parsed]);
+      const withBank = parsed.map((r) => ({
+        ...r,
+        banco: chosenBank?.nome || r.banco,
+        bancoId: chosenBank?.id || '',
+      }));
+      setStagingRows((prev) => [...prev, ...withBank]);
       setPastedText('');
       setImportFeedback({
         type: 'success',
@@ -455,7 +784,12 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   };
 
   const handleLoadEditableModel = () => {
-    const modelRows = buildEditableModelRows(accountsPlan, customFields);
+    const chosenBank = bankAccounts.find((b) => b.id === selectedExtratoBankId);
+    const modelRows = buildEditableModelRows(accountsPlan, customFields).map((r) => ({
+      ...r,
+      banco: chosenBank?.nome || bankDefaultName || r.banco,
+      bancoId: chosenBank?.id || '',
+    }));
     setStagingRows((prev) => [...prev, ...modelRows]);
     setImportFeedback({
       type: 'success',
@@ -465,6 +799,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
   const handleAddEmptyStagingRow = () => {
     const firstAcc = accountsPlan.find((a) => a.ativo && a.tipo === 'despesa') || accountsPlan[0];
+    const chosenBank = bankAccounts.find((b) => b.id === selectedExtratoBankId) || defaultActiveBank;
     const emptyExtras: Record<string, string> = {};
     customFields.forEach((f) => {
       emptyExtras[f.id] = '';
@@ -477,7 +812,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         descricao: '',
         tipo: firstAcc?.tipo || 'despesa',
         valor: 0,
-        banco: (bankDefaultName || 'SICREDI').toUpperCase(),
+        banco: (chosenBank?.nome || bankDefaultName || 'SICREDI').toUpperCase(),
+        bancoId: chosenBank?.id || '',
         formaPagamento: 'PIX',
         documento: '',
         contaId: firstAcc?.id || '',
@@ -528,24 +864,30 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     const valid = stagingRows.filter((r) => r.descricao.trim() !== '' || r.valor > 0);
     if (valid.length === 0) return;
 
-    const toSave: FinancialEntry[] = valid.map((r, idx) => ({
-      id: `fin-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-      data: r.data || todayStr,
-      descricao: (r.descricao || 'LANÇAMENTO EXTRATO').trim().toUpperCase(),
-      tipo: r.tipo,
-      contaId: r.contaId,
-      contaNome: (r.contaNome || (r.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS')).toUpperCase(),
-      grupo: (r.grupo || 'GERAL').toUpperCase(),
-      valor: Math.abs(Number(r.valor) || 0),
-      banco: (r.banco || bankDefaultName || 'BANCO').trim().toUpperCase(),
-      formaPagamento: (r.formaPagamento || 'CONTA CORRENTE').toUpperCase(),
-      documento: (r.documento || '').trim().toUpperCase(),
-      status: r.status,
-      origem: 'extrato',
-      observacoes: (r.observacoes || '').trim().toUpperCase(),
-      camposExtras: r.camposExtras || {},
-      criadoEm: new Date().toISOString(),
-    }));
+    const toSave: FinancialEntry[] = valid.map((r, idx) => {
+      const matchedBank =
+        (r.bancoId ? bankAccounts.find((b) => b.id === r.bancoId) : undefined) ||
+        bankAccounts.find((b) => b.nome.trim().toUpperCase() === (r.banco || '').trim().toUpperCase());
+      return {
+        id: `fin-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        data: r.data || todayStr,
+        descricao: (r.descricao || 'LANÇAMENTO EXTRATO').trim().toUpperCase(),
+        tipo: r.tipo,
+        contaId: r.contaId,
+        contaNome: (r.contaNome || (r.tipo === 'receita' ? 'OUTRAS RECEITAS' : 'OUTRAS DESPESAS')).toUpperCase(),
+        grupo: (r.grupo || 'GERAL').toUpperCase(),
+        valor: Math.abs(Number(r.valor) || 0),
+        banco: (matchedBank?.nome || r.banco || bankDefaultName || 'BANCO').trim().toUpperCase(),
+        bancoId: matchedBank?.id || r.bancoId || '',
+        formaPagamento: (r.formaPagamento || 'CONTA CORRENTE').toUpperCase(),
+        documento: (r.documento || '').trim().toUpperCase(),
+        status: r.status,
+        origem: 'extrato',
+        observacoes: (r.observacoes || '').trim().toUpperCase(),
+        camposExtras: r.camposExtras || {},
+        criadoEm: new Date().toISOString(),
+      };
+    });
 
     onSaveEntriesBatch(toSave);
     setStagingRows([]);
@@ -556,7 +898,144 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     setSubTab('movimentacoes');
   };
 
-  // Handlers do Plano de Contas
+  // Handlers do Plano de Contas (Inline + Rápido + Lote + Excel)
+  const updatePlanDraft = (id: string, patch: Partial<AccountPlanItem>) => {
+    setPlanDrafts((prev) => {
+      const current = prev[id] || accountsPlan.find((a) => a.id === id);
+      if (!current) return prev;
+      return {
+        ...prev,
+        [id]: { ...current, ...patch },
+      };
+    });
+    setDirtyPlanIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
+
+  const commitPlanDraftRow = (id: string) => {
+    const draft = planDrafts[id];
+    if (!draft) return;
+    if (!draft.nome.trim()) {
+      // Restaura nome anterior se deixou vazio
+      const orig = accountsPlan.find((a) => a.id === id);
+      if (orig) {
+        setPlanDrafts((prev) => ({ ...prev, [id]: { ...orig } }));
+      }
+      setDirtyPlanIds((prev) => prev.filter((x) => x !== id));
+      return;
+    }
+    const normalized: AccountPlanItem = {
+      ...draft,
+      codigo: draft.codigo.trim().toUpperCase(),
+      nome: draft.nome.trim().toUpperCase(),
+      grupo: (draft.grupo.trim() || 'GERAL').toUpperCase(),
+      descricao: (draft.descricao || '').trim(),
+    };
+    onSaveAccount(normalized);
+    setDirtyPlanIds((prev) => prev.filter((x) => x !== id));
+  };
+
+  const commitAllPlanDrafts = () => {
+    if (dirtyPlanIds.length === 0) return;
+    const toSave: AccountPlanItem[] = [];
+    dirtyPlanIds.forEach((id) => {
+      const draft = planDrafts[id];
+      if (draft && draft.nome.trim()) {
+        toSave.push({
+          ...draft,
+          codigo: draft.codigo.trim().toUpperCase(),
+          nome: draft.nome.trim().toUpperCase(),
+          grupo: (draft.grupo.trim() || 'GERAL').toUpperCase(),
+          descricao: (draft.descricao || '').trim(),
+        });
+      }
+    });
+    if (toSave.length > 0) {
+      if (onSaveAccountsBatch) onSaveAccountsBatch(toSave);
+      else toSave.forEach((a) => onSaveAccount(a));
+    }
+    setDirtyPlanIds([]);
+    setImportFeedback({
+      type: 'success',
+      msg: `${toSave.length} conta(s) do Plano de Contas atualizadas!`,
+    });
+  };
+
+  const handleQuickAddAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickNewAccount.nome.trim()) return;
+    const sameTypeCount = accountsPlan.filter((a) => a.tipo === quickNewAccount.tipo).length + 1;
+    const prefix = quickNewAccount.tipo === 'receita' ? '1' : '2';
+    const nextCode =
+      quickNewAccount.codigo.trim().toUpperCase() ||
+      `${prefix}.${String(sameTypeCount).padStart(2, '0')}`;
+    const newAcc: AccountPlanItem = {
+      id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      codigo: nextCode,
+      tipo: quickNewAccount.tipo,
+      grupo: (
+        quickNewAccount.grupo.trim() ||
+        (quickNewAccount.tipo === 'receita' ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS')
+      ).toUpperCase(),
+      nome: quickNewAccount.nome.trim().toUpperCase(),
+      descricao: quickNewAccount.descricao.trim(),
+      ativo: true,
+    };
+    onSaveAccount(newAcc);
+    setQuickNewAccount({
+      codigo: '',
+      tipo: quickNewAccount.tipo,
+      grupo: quickNewAccount.tipo === 'receita' ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS',
+      nome: '',
+      descricao: '',
+    });
+    setImportFeedback({
+      type: 'success',
+      msg: `Conta "${newAcc.codigo} · ${newAcc.nome}" adicionada ao Plano de Contas!`,
+    });
+  };
+
+  const handleDuplicateAccount = (acc: AccountPlanItem) => {
+    const source = planDrafts[acc.id] || acc;
+    const duplicated: AccountPlanItem = {
+      id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      codigo: `${source.codigo}-C`,
+      nome: `${source.nome} (CÓPIA)`,
+      tipo: source.tipo,
+      grupo: source.grupo,
+      descricao: source.descricao || '',
+      ativo: true,
+    };
+    onSaveAccount(duplicated);
+  };
+
+  const handlePlanFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const imported = await parseAccountsPlanFile(file);
+      if (imported.length === 0) {
+        setImportFeedback({
+          type: 'error',
+          msg: 'Nenhuma conta identificada no arquivo. Use colunas: Código, Tipo, Grupo, Nome da Conta, Descrição.',
+        });
+      } else {
+        if (onSaveAccountsBatch) onSaveAccountsBatch(imported);
+        else imported.forEach((a) => onSaveAccount(a));
+        setImportFeedback({
+          type: 'success',
+          msg: `${imported.length} conta(s) importadas para o Plano de Contas! Você pode editar qualquer célula abaixo.`,
+        });
+      }
+    } catch (err: any) {
+      setImportFeedback({
+        type: 'error',
+        msg: `Erro ao importar Plano de Contas: ${err?.message || 'formato inválido'}`,
+      });
+    } finally {
+      e.target.value = '';
+    }
+  };
+
   const openNewAccountModal = (tipo: AccountPlanType = 'despesa') => {
     const sameTypeCount = accountsPlan.filter((a) => a.tipo === tipo).length + 1;
     const prefix = tipo === 'receita' ? '1' : '2';
@@ -573,14 +1052,15 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   };
 
   const openEditAccountModal = (acc: AccountPlanItem) => {
-    setEditingAccount(acc);
+    const current = planDrafts[acc.id] || acc;
+    setEditingAccount(current);
     setAccountForm({
-      codigo: acc.codigo,
-      nome: acc.nome,
-      tipo: acc.tipo,
-      grupo: acc.grupo,
-      descricao: acc.descricao || '',
-      ativo: acc.ativo,
+      codigo: current.codigo,
+      nome: current.nome,
+      tipo: current.tipo,
+      grupo: current.grupo,
+      descricao: current.descricao || '',
+      ativo: current.ativo,
     });
     setIsAccountModalOpen(true);
   };
@@ -588,8 +1068,9 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
   const handleSaveAccountModal = (e: React.FormEvent) => {
     e.preventDefault();
     if (!accountForm.nome.trim()) return;
+    const savedId = editingAccount ? editingAccount.id : `acc-${Date.now()}`;
     onSaveAccount({
-      id: editingAccount ? editingAccount.id : `acc-${Date.now()}`,
+      id: savedId,
       codigo: accountForm.codigo.trim().toUpperCase(),
       nome: accountForm.nome.trim().toUpperCase(),
       tipo: accountForm.tipo,
@@ -597,6 +1078,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       descricao: accountForm.descricao?.trim() || '',
       ativo: accountForm.ativo,
     });
+    setDirtyPlanIds((prev) => prev.filter((x) => x !== savedId));
     setIsAccountModalOpen(false);
   };
 
@@ -635,6 +1117,41 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     openFieldForm(undefined);
   };
 
+  const planGroupsList = useMemo(() => {
+    const groups = new Set<string>([
+      'RECEITAS OPERACIONAIS',
+      'OUTRAS RECEITAS',
+      'DESPESAS OPERACIONAIS',
+      'DESPESAS FIXAS',
+      'DESPESAS COM PESSOAL',
+      'DESPESAS BANCÁRIAS',
+      'IMPOSTOS E TAXAS',
+      'INVESTIMENTOS',
+    ]);
+    accountsPlan.forEach((a) => {
+      if (a.grupo) groups.add(a.grupo.toUpperCase());
+    });
+    return Array.from(groups).sort();
+  }, [accountsPlan]);
+
+  const filteredBankAccounts = useMemo(() => {
+    const term = bankSearch.trim().toLowerCase();
+    return bankAccounts.filter((b) => {
+      if (bankFilterStatus === 'ativas' && !b.ativo) return false;
+      if (bankFilterStatus === 'inativas' && b.ativo) return false;
+      if (term) {
+        return (
+          b.nome.toLowerCase().includes(term) ||
+          b.banco.toLowerCase().includes(term) ||
+          (b.agencia || '').toLowerCase().includes(term) ||
+          (b.numeroConta || '').toLowerCase().includes(term) ||
+          (b.chavePix || '').toLowerCase().includes(term)
+        );
+      }
+      return true;
+    });
+  }, [bankAccounts, bankFilterStatus, bankSearch]);
+
   const filteredPlanAccounts = useMemo(() => {
     const term = planSearch.trim().toLowerCase();
     return accountsPlan
@@ -644,7 +1161,8 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
           return (
             a.nome.toLowerCase().includes(term) ||
             a.codigo.toLowerCase().includes(term) ||
-            a.grupo.toLowerCase().includes(term)
+            a.grupo.toLowerCase().includes(term) ||
+            (a.descricao || '').toLowerCase().includes(term)
           );
         }
         return true;
@@ -663,10 +1181,10 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             </span>
             <div>
               <h1 className="text-lg sm:text-xl font-extrabold text-neutral-950 tracking-tight">
-                Financeiro, Plano de Contas & Extrato Bancário
+                Financeiro, Contas Bancárias & Plano de Contas
               </h1>
               <p className="text-xs text-neutral-500">
-                Cadastre receitas e despesas, importe extratos bancários e edite ou personalize qualquer campo.
+                Gerencie bancos e caixas, importe extratos bancários e edite diretamente qualquer linha do plano de contas ou movimentação.
               </p>
             </div>
           </div>
@@ -678,15 +1196,23 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
               openFieldForm(undefined);
               setIsFieldsModalOpen(true);
             }}
-            className="px-3 py-2 text-xs font-semibold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-2xs"
+            className="px-3 py-2 text-xs font-semibold text-neutral-800 bg-white hover:bg-neutral-50 border border-neutral-300 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-2xs shrink-0"
           >
             <SlidersHorizontal className="w-3.5 h-3.5 text-neutral-700" />
             Campos ({customFields.length})
           </button>
 
           <button
+            onClick={() => openNewBankModal(false)}
+            className="px-3 py-2 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+          >
+            <CreditCard className="w-3.5 h-3.5 text-emerald-700" />
+            + Conta Bancária
+          </button>
+
+          <button
             onClick={() => setSubTab('extrato')}
-            className="px-3 py-2 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap"
+            className="px-3 py-2 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
           >
             <Upload className="w-3.5 h-3.5 text-blue-600" />
             Extrato Bancário
@@ -694,7 +1220,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
           <button
             onClick={() => openNewEntryModal('despesa')}
-            className="px-3.5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-xs"
+            className="px-3.5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-xs shrink-0"
           >
             <Plus className="w-3.5 h-3.5 text-emerald-400" />
             Novo Lançamento
@@ -707,7 +1233,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         <div className="flex flex-wrap items-center gap-1 bg-neutral-200/70 p-1 rounded-xl w-full sm:w-auto">
           <button
             onClick={() => setSubTab('movimentacoes')}
-            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 ${
               subTab === 'movimentacoes'
                 ? 'bg-white text-neutral-950 font-bold shadow-2xs'
                 : 'text-neutral-600 hover:text-neutral-950'
@@ -718,7 +1244,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
           </button>
           <button
             onClick={() => setSubTab('extrato')}
-            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 ${
               subTab === 'extrato'
                 ? 'bg-white text-neutral-950 font-bold shadow-2xs'
                 : 'text-neutral-600 hover:text-neutral-950'
@@ -733,8 +1259,19 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
             )}
           </button>
           <button
+            onClick={() => setSubTab('bancos')}
+            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 ${
+              subTab === 'bancos'
+                ? 'bg-white text-neutral-950 font-bold shadow-2xs'
+                : 'text-neutral-600 hover:text-neutral-950'
+            }`}
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            Contas Bancárias ({bankAccounts.length})
+          </button>
+          <button
             onClick={() => setSubTab('plano')}
-            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
+            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 ${
               subTab === 'plano'
                 ? 'bg-white text-neutral-950 font-bold shadow-2xs'
                 : 'text-neutral-600 hover:text-neutral-950'
@@ -811,7 +1348,7 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
           {/* Barra de Filtros */}
           <div className="bg-white border border-neutral-200 rounded-2xl p-3.5 sm:p-4 shadow-2xs space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
               {/* Busca */}
               <div className="flex items-center gap-2 px-3 py-2 bg-neutral-50 border border-neutral-200 rounded-xl lg:col-span-2">
                 <Search className="w-4 h-4 text-neutral-400 shrink-0" />
@@ -835,21 +1372,40 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 onChange={(e) => setFilterTipo(e.target.value as any)}
                 className="px-3 py-2 text-xs bg-neutral-50 border border-neutral-200 rounded-xl font-medium text-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900"
               >
-                <option value="todos">Todos os Tipos (Rec + Desp)</option>
+                <option value="todos">Todos os Tipos</option>
                 <option value="receita">Apenas Receitas</option>
                 <option value="despesa">Apenas Despesas</option>
               </select>
 
-              {/* Conta */}
+              {/* Conta do Plano */}
               <select
                 value={filterContaId}
                 onChange={(e) => setFilterContaId(e.target.value)}
                 className="px-3 py-2 text-xs bg-neutral-50 border border-neutral-200 rounded-xl font-medium text-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900"
               >
-                <option value="todas">Todas as Contas do Plano</option>
+                <option value="todas">Todas as Contas (Plano)</option>
                 {accountsPlan.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.codigo} · {a.nome}
+                  </option>
+                ))}
+              </select>
+
+              {/* Banco / Caixa */}
+              <select
+                value={filterBanco}
+                onChange={(e) => setFilterBanco(e.target.value)}
+                className="px-3 py-2 text-xs bg-neutral-50 border border-neutral-200 rounded-xl font-medium text-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900"
+              >
+                <option value="todos">Todos os Bancos / Caixas</option>
+                {bankAccounts.map((b) => (
+                  <option key={b.id} value={`bank:${b.id}`}>
+                    {b.nome} ({b.tipoConta})
+                  </option>
+                ))}
+                {legacyUnregisteredBankNames.map((name) => (
+                  <option key={name} value={`name:${name}`}>
+                    {name} (Não cadastrado)
                   </option>
                 ))}
               </select>
@@ -1142,12 +1698,27 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                           </select>
                         </td>
                         <td className="py-2 px-2">
-                          <input
-                            type="text"
-                            value={inlineDraft.banco}
-                            onChange={(e) => setInlineDraft({ ...inlineDraft, banco: e.target.value })}
-                            className="w-24 px-2 py-1 border border-blue-300 rounded text-xs bg-white uppercase"
-                          />
+                          <select
+                            value={inlineDraft.bancoId || ''}
+                            onChange={(e) => {
+                              const b = bankAccounts.find((x) => x.id === e.target.value);
+                              setInlineDraft({
+                                ...inlineDraft,
+                                bancoId: b ? b.id : '',
+                                banco: b ? b.nome : inlineDraft.banco,
+                              });
+                            }}
+                            className="w-32 px-2 py-1 border border-blue-300 rounded text-xs bg-white uppercase font-medium"
+                          >
+                            {!inlineDraft.bancoId && inlineDraft.banco && (
+                              <option value="">{inlineDraft.banco}</option>
+                            )}
+                            {bankAccounts.map((b) => (
+                              <option key={b.id} value={b.id}>
+                                {b.nome}
+                              </option>
+                            ))}
+                          </select>
                         </td>
                         {activeCustomFields.map((cf) => (
                           <td key={cf.id} className="py-2 px-2">
@@ -1369,16 +1940,46 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-neutral-700 mb-1">
-                    Banco / Conta Padrão
-                  </label>
-                  <input
-                    type="text"
-                    value={bankDefaultName}
-                    onChange={(e) => setBankDefaultName(e.target.value.toUpperCase())}
-                    placeholder="EX: SICREDI, ITAÚ, CAIXA..."
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-neutral-700">
+                      Conta Bancária de Destino *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => openNewBankModal(false)}
+                      className="text-[11px] font-bold text-blue-700 hover:underline flex items-center gap-0.5"
+                    >
+                      <Plus className="w-3 h-3" /> Nova Conta
+                    </button>
+                  </div>
+                  <select
+                    value={selectedExtratoBankId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedExtratoBankId(val);
+                      if (val !== '__custom__') {
+                        const found = bankAccounts.find((b) => b.id === val);
+                        if (found) setBankDefaultName(found.nome);
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-xl bg-white uppercase font-semibold focus:outline-none focus:ring-2 focus:ring-neutral-900"
-                  />
+                  >
+                    {bankAccounts.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.nome} ({b.banco})
+                      </option>
+                    ))}
+                    <option value="__custom__">-- OUTRO BANCO (DIGITAR) --</option>
+                  </select>
+                  {selectedExtratoBankId === '__custom__' && (
+                    <input
+                      type="text"
+                      value={bankDefaultName}
+                      onChange={(e) => setBankDefaultName(e.target.value.toUpperCase())}
+                      placeholder="DIGITE O NOME DO BANCO..."
+                      className="mt-2 w-full px-3 py-1.5 text-xs border border-neutral-300 rounded-xl bg-white uppercase font-semibold"
+                    />
+                  )}
                 </div>
                 <div className="flex items-end">
                   <input
@@ -1602,13 +2203,24 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={row.banco}
-                          placeholder="Banco"
-                          onChange={(e) => updateStagingRow(row.tempId, { banco: e.target.value.toUpperCase() })}
-                          className="px-2 py-1 border border-neutral-300 rounded bg-white uppercase"
-                        />
+                        <select
+                          value={row.bancoId || ''}
+                          onChange={(e) => {
+                            const b = bankAccounts.find((x) => x.id === e.target.value);
+                            updateStagingRow(row.tempId, {
+                              bancoId: b ? b.id : '',
+                              banco: b ? b.nome : row.banco,
+                            });
+                          }}
+                          className="px-2 py-1 border border-neutral-300 rounded bg-white uppercase text-xs"
+                        >
+                          {!row.bancoId && <option value="">{row.banco || '-- Banco --'}</option>}
+                          {bankAccounts.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.nome}
+                            </option>
+                          ))}
+                        </select>
                         <input
                           type="text"
                           value={row.documento}
@@ -1711,14 +2323,24 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                             />
                           </td>
                           <td className="py-1.5 px-2">
-                            <input
-                              type="text"
-                              value={row.banco}
-                              onChange={(e) =>
-                                updateStagingRow(row.tempId, { banco: e.target.value.toUpperCase() })
-                              }
-                              className="w-24 px-2 py-1 border border-neutral-300 rounded bg-white uppercase"
-                            />
+                            <select
+                              value={row.bancoId || ''}
+                              onChange={(e) => {
+                                const b = bankAccounts.find((x) => x.id === e.target.value);
+                                updateStagingRow(row.tempId, {
+                                  bancoId: b ? b.id : '',
+                                  banco: b ? b.nome : row.banco,
+                                });
+                              }}
+                              className="w-32 px-2 py-1 border border-neutral-300 rounded bg-white uppercase text-xs"
+                            >
+                              {!row.bancoId && <option value="">{row.banco || '-- Banco --'}</option>}
+                              {bankAccounts.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.nome}
+                                </option>
+                              ))}
+                            </select>
                           </td>
                           <td className="py-1.5 px-2">
                             <input
@@ -1785,144 +2407,275 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* SUB-ABA 3: PLANO DE CONTAS (RECEITAS & DESPESAS EDITÁVEL)             */}
+      {/* SUB-ABA 3: CONTAS BANCÁRIAS E CAIXA (CADASTRO & SALDO REAL)           */}
       {/* ===================================================================== */}
-      {subTab === 'plano' && (
+      {subTab === 'bancos' && (
         <div className="space-y-4">
-          <div className="bg-white border border-neutral-200 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          {/* KPI Consolidado de Bancos e Caixas */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-white border border-neutral-200 rounded-xl p-4 shadow-2xs">
+              <span className="text-[10px] font-bold uppercase text-neutral-500 block">
+                Saldo Atual Consolidado (Conciliado)
+              </span>
+              <span
+                className={`text-xl sm:text-2xl font-black font-mono tabular-nums ${
+                  consolidatedBankTotals.saldoAtualTotal >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                }`}
+              >
+                {formatCurrency(consolidatedBankTotals.saldoAtualTotal)}
+              </span>
+              <span className="text-[11px] text-neutral-400 block mt-0.5">
+                Soma do saldo inicial + lançamentos conciliados
+              </span>
+            </div>
+
+            <div className="bg-white border border-neutral-200 rounded-xl p-4 shadow-2xs">
+              <span className="text-[10px] font-bold uppercase text-neutral-500 block">
+                Saldo Previsto (Com Pendentes)
+              </span>
+              <span
+                className={`text-xl sm:text-2xl font-black font-mono tabular-nums ${
+                  consolidatedBankTotals.saldoPrevistoTotal >= 0 ? 'text-neutral-950' : 'text-rose-700'
+                }`}
+              >
+                {formatCurrency(consolidatedBankTotals.saldoPrevistoTotal)}
+              </span>
+              <span className="text-[11px] text-neutral-400 block mt-0.5">
+                Projeção considerando contas a pagar e receber
+              </span>
+            </div>
+
+            <div className="bg-white border border-neutral-200 rounded-xl p-4 shadow-2xs">
+              <span className="text-[10px] font-bold uppercase text-neutral-500 block">
+                Contas Bancárias & Caixas
+              </span>
+              <span className="text-xl sm:text-2xl font-black font-mono tabular-nums text-neutral-950">
+                {consolidatedBankTotals.ativas}{' '}
+                <span className="text-xs font-normal text-neutral-400">/ {bankAccounts.length} cadastradas</span>
+              </span>
+              <span className="text-[11px] text-neutral-400 block mt-0.5">
+                Prontas para lançamentos e importação de extratos
+              </span>
+            </div>
+          </div>
+
+          {/* Barra de Controle das Contas Bancárias */}
+          <div className="bg-white border border-neutral-200 rounded-2xl p-4 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2 flex-1">
               <div className="flex items-center gap-2 px-3 py-2 bg-neutral-50 border border-neutral-200 rounded-xl flex-1 min-w-[200px] max-w-sm">
                 <Search className="w-4 h-4 text-neutral-400" />
                 <input
                   type="text"
-                  placeholder="Buscar por código, nome ou grupo..."
-                  value={planSearch}
-                  onChange={(e) => setPlanSearch(e.target.value)}
+                  placeholder="Buscar banco, conta, agência ou PIX..."
+                  value={bankSearch}
+                  onChange={(e) => setBankSearch(e.target.value)}
                   className="w-full text-xs bg-transparent focus:outline-none"
                 />
               </div>
 
               <div className="flex items-center bg-neutral-100 p-1 rounded-xl">
                 {[
-                  { id: 'todos', label: 'Todas' },
-                  { id: 'receita', label: 'Receitas' },
-                  { id: 'despesa', label: 'Despesas' },
-                ].map((t) => (
+                  { id: 'todas', label: 'Todas' },
+                  { id: 'ativas', label: 'Ativas' },
+                  { id: 'inativas', label: 'Inativas' },
+                ].map((f) => (
                   <button
-                    key={t.id}
-                    onClick={() => setPlanFilterTipo(t.id as any)}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                      planFilterTipo === t.id
+                    key={f.id}
+                    onClick={() => setBankFilterStatus(f.id as any)}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                      bankFilterStatus === f.id
                         ? 'bg-white text-neutral-950 font-bold shadow-2xs'
                         : 'text-neutral-600 hover:text-neutral-900'
                     }`}
                   >
-                    {t.label}
+                    {f.label}
                   </button>
                 ))}
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {onRestoreDefaultAccounts && (
+              {onRestoreDefaultBankAccounts && (
                 <button
-                  onClick={onRestoreDefaultAccounts}
-                  className="px-3 py-2 text-xs font-semibold text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5"
-                  title="Adicionar contas do modelo padrão que não estejam na lista"
+                  type="button"
+                  onClick={onRestoreDefaultBankAccounts}
+                  className="px-3 py-2 text-xs font-semibold text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  Modelo Padrão
+                  Contas Padrão
                 </button>
               )}
               <button
-                onClick={() => openNewAccountModal('receita')}
-                className="px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors flex items-center gap-1"
+                type="button"
+                onClick={() => openNewBankModal(false)}
+                className="px-4 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-xs shrink-0"
               >
-                <Plus className="w-3.5 h-3.5" /> Nova Receita
-              </button>
-              <button
-                onClick={() => openNewAccountModal('despesa')}
-                className="px-3 py-2 text-xs font-bold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" /> Nova Despesa
+                <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                Nova Conta Bancária
               </button>
             </div>
           </div>
 
-          {/* Lista / Cards de Contas */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {filteredPlanAccounts.map((acc) => {
-              const stats = accountTotalsMap.get(acc.id) || accountTotalsMap.get(acc.nome) || { total: 0, count: 0 };
+          {/* Lista de Contas Bancárias */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {filteredBankAccounts.map((bank) => {
+              const bal = bankBalancesMap.get(bank.id) || {
+                entradasConciliadas: 0,
+                saidasConciliadas: 0,
+                entradasPendentes: 0,
+                saidasPendentes: 0,
+                saldoAtual: bank.saldoInicial,
+                saldoPrevisto: bank.saldoInicial,
+                count: 0,
+              };
+              const hasPending = bal.entradasPendentes > 0 || bal.saidasPendentes > 0;
               return (
                 <div
-                  key={acc.id}
-                  className={`bg-white border rounded-2xl p-4 shadow-2xs flex flex-col justify-between gap-3 ${
-                    acc.ativo ? 'border-neutral-200' : 'border-neutral-200 opacity-60'
+                  key={bank.id}
+                  className={`bg-white border border-neutral-200 rounded-2xl p-4 sm:p-5 shadow-2xs flex flex-col justify-between gap-4 ${
+                    !bank.ativo ? 'opacity-65' : ''
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="font-mono font-bold text-neutral-500">{acc.codigo}</span>
-                        <span className="text-neutral-300">·</span>
-                        <span
-                          className={`font-bold uppercase text-[11px] flex items-center gap-1 ${
-                            acc.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
-                          }`}
-                        >
-                          {acc.tipo === 'receita' ? (
-                            <TrendingUp className="w-3 h-3" />
-                          ) : (
-                            <TrendingDown className="w-3 h-3" />
-                          )}
-                          {acc.tipo === 'receita' ? 'Receita' : 'Despesa'}
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="p-1.5 bg-neutral-100 text-neutral-800 rounded-lg shrink-0">
+                          <Landmark className="w-4 h-4" />
                         </span>
-                        <span className="text-neutral-300">·</span>
-                        <span className="text-[11px] text-neutral-500 truncate">{acc.grupo}</span>
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-extrabold text-neutral-950 truncate">{bank.nome}</h3>
+                          <span className="text-[11px] text-neutral-500 block truncate">
+                            {bank.banco} · {bank.tipoConta}
+                          </span>
+                        </div>
                       </div>
-                      <h3 className="text-sm font-bold text-neutral-950 truncate">{acc.nome}</h3>
-                      {acc.descricao && (
-                        <p className="text-xs text-neutral-500 line-clamp-2">{acc.descricao}</p>
-                      )}
+
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-neutral-500 font-mono pt-1">
+                        {(bank.agencia || bank.numeroConta) && (
+                          <span>
+                            Ag: <strong>{bank.agencia || '—'}</strong> · Conta: <strong>{bank.numeroConta || '—'}</strong>
+                          </span>
+                        )}
+                        {bank.chavePix && (
+                          <span className="truncate max-w-[230px]">
+                            PIX: <strong>{bank.chavePix}</strong>
+                          </span>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="text-right shrink-0">
-                      <span
-                        className={`text-sm font-mono font-black block ${
-                          acc.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
-                        }`}
-                      >
-                        {formatCurrency(stats.total)}
-                      </span>
-                      <span className="text-[10px] text-neutral-400 font-mono">
-                        {stats.count} {stats.count === 1 ? 'lançamento' : 'lançamentos'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-2.5 border-t border-neutral-100 text-xs">
                     <button
-                      onClick={() => onSaveAccount({ ...acc, ativo: !acc.ativo })}
-                      className={`text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors ${
-                        acc.ativo
+                      type="button"
+                      onClick={() => onSaveBankAccount({ ...bank, ativo: !bank.ativo })}
+                      className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors shrink-0 whitespace-nowrap ${
+                        bank.ativo
                           ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
                           : 'text-neutral-500 bg-neutral-100 hover:bg-neutral-200'
                       }`}
                     >
-                      {acc.ativo ? 'Ativa' : 'Inativa'}
+                      {bank.ativo ? 'Ativa' : 'Inativa'}
                     </button>
+                  </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => openEditAccountModal(acc)}
-                        className="px-2.5 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-lg font-semibold flex items-center gap-1"
+                  {/* Balanço da Conta */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3 border-t border-neutral-100 text-xs">
+                    <div>
+                      <span className="text-[10px] text-neutral-400 uppercase block">Saldo Inicial</span>
+                      <span className="font-mono font-semibold tabular-nums text-neutral-800">
+                        {formatCurrency(bank.saldoInicial)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-neutral-400 uppercase block">Entradas ({bal.count})</span>
+                      <span className="font-mono font-semibold tabular-nums text-emerald-700">
+                        +{formatCurrency(bal.entradasConciliadas)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-neutral-400 uppercase block">Saídas</span>
+                      <span className="font-mono font-semibold tabular-nums text-rose-700">
+                        -{formatCurrency(bal.saidasConciliadas)}
+                      </span>
+                    </div>
+                    <div className="sm:text-right">
+                      <span className="text-[10px] text-neutral-500 font-bold uppercase block">Saldo Atual</span>
+                      <span
+                        className={`font-mono font-black tabular-nums text-sm ${
+                          bal.saldoAtual >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                        }`}
                       >
-                        <Edit2 className="w-3 h-3" /> Editar
+                        {formatCurrency(bal.saldoAtual)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {(hasPending || bank.observacoes) && (
+                    <div className="text-[11px] text-neutral-500 flex flex-wrap items-center justify-between gap-2 bg-neutral-50 px-3 py-1.5 rounded-xl">
+                      {hasPending ? (
+                        <span>
+                          Previsto (c/ pendentes):{' '}
+                          <strong className="font-mono tabular-nums text-neutral-800">
+                            {formatCurrency(bal.saldoPrevisto)}
+                          </strong>
+                        </span>
+                      ) : (
+                        <span className="truncate">{bank.observacoes}</span>
+                      )}
+                      {bank.dataSaldoInicial && (
+                        <span className="text-[10px] font-mono text-neutral-400">
+                          Base: {bank.dataSaldoInicial.split('-').reverse().join('/')}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Ações Rápidas */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-100 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFilterBanco(`bank:${bank.id}`);
+                          setSubTab('movimentacoes');
+                        }}
+                        className="px-2.5 py-1.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-lg font-semibold flex items-center gap-1 whitespace-nowrap"
+                      >
+                        Movimentações <ArrowRight className="w-3 h-3" />
                       </button>
                       <button
-                        onClick={() => setAccountToDelete(acc)}
+                        type="button"
+                        onClick={() => {
+                          setSelectedExtratoBankId(bank.id);
+                          setBankDefaultName(bank.nome);
+                          setSubTab('extrato');
+                        }}
+                        className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-800 rounded-lg font-semibold flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <Upload className="w-3 h-3" /> Importar Extrato
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openNewEntryModal('despesa', bank)}
+                        className="px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg font-semibold flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <Plus className="w-3 h-3 text-emerald-400" /> Lançar
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEditBankModal(bank)}
+                        className="p-1.5 text-neutral-600 hover:bg-neutral-100 rounded-lg"
+                        title="Editar conta bancária"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBankToDelete(bank)}
                         className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg"
-                        title="Apagar conta"
+                        title="Excluir conta bancária"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -1931,6 +2684,656 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 </div>
               );
             })}
+
+            {filteredBankAccounts.length === 0 && (
+              <div className="md:col-span-2 bg-white border border-neutral-200 rounded-2xl p-10 text-center space-y-3">
+                <Landmark className="w-8 h-8 text-neutral-300 mx-auto" />
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-neutral-800">Nenhuma conta bancária encontrada</p>
+                  <p className="text-[11px] text-neutral-500">
+                    Cadastre seus bancos (Sicredi, Itaú, BB, Nubank) e caixas internos para controlar saldos e vincular extratos.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openNewBankModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 rounded-xl inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5 text-emerald-400" /> Criar Primeira Conta Bancária
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* SUB-ABA 4: PLANO DE CONTAS (TABELA INLINE TOTALMENTE EDITÁVEL)        */}
+      {/* ===================================================================== */}
+      {subTab === 'plano' && (
+        <div className="space-y-4">
+          {/* Toolbar de Busca, Filtro, Importação e Exportação */}
+          <div className="bg-white border border-neutral-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 flex-1">
+                <div className="flex items-center gap-2 px-3 py-2 bg-neutral-50 border border-neutral-200 rounded-xl flex-1 min-w-[200px] max-w-sm">
+                  <Search className="w-4 h-4 text-neutral-400 shrink-0" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por código, nome, grupo ou descrição..."
+                    value={planSearch}
+                    onChange={(e) => setPlanSearch(e.target.value)}
+                    className="w-full text-xs bg-transparent focus:outline-none"
+                  />
+                  {planSearch && (
+                    <button onClick={() => setPlanSearch('')} className="text-neutral-400 hover:text-neutral-700">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center bg-neutral-100 p-1 rounded-xl">
+                  {[
+                    { id: 'todos', label: 'Todas' },
+                    { id: 'receita', label: 'Receitas' },
+                    { id: 'despesa', label: 'Despesas' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setPlanFilterTipo(t.id as any)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                        planFilterTipo === t.id
+                          ? 'bg-white text-neutral-950 font-bold shadow-2xs'
+                          : 'text-neutral-600 hover:text-neutral-900'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={planFileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv,.txt"
+                  onChange={handlePlanFileUpload}
+                  className="hidden"
+                />
+                {onRestoreDefaultAccounts && (
+                  <button
+                    type="button"
+                    onClick={onRestoreDefaultAccounts}
+                    className="px-3 py-2 text-xs font-semibold text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                    title="Restaurar contas padrão que não estejam cadastradas"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Modelo Padrão
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => planFileInputRef.current?.click()}
+                  className="px-3 py-2 text-xs font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                  title="Importar Plano de Contas em Excel (.xlsx) ou CSV"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  Importar Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportAccountsPlanToExcel(filteredPlanAccounts)}
+                  disabled={filteredPlanAccounts.length === 0}
+                  className="px-3 py-2 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 disabled:opacity-40 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Exportar Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openNewAccountModal('receita')}
+                  className="px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Receita
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openNewAccountModal('despesa')}
+                  className="px-3 py-2 text-xs font-bold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Despesa
+                </button>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-neutral-500">
+              Edite qualquer célula diretamente na tabela abaixo (Código, Tipo, Grupo, Nome da Conta, Descrição ou Status) — as alterações são salvas automaticamente ao sair da linha ou pelo botão Salvar.
+            </p>
+          </div>
+
+          {/* Banner de Alterações Pendentes */}
+          {dirtyPlanIds.length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-950 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-semibold">
+                {dirtyPlanIds.length} conta(s) com edições em andamento.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const reset: Record<string, AccountPlanItem> = {};
+                    accountsPlan.forEach((a) => {
+                      reset[a.id] = { ...a };
+                    });
+                    setPlanDrafts(reset);
+                    setDirtyPlanIds([]);
+                  }}
+                  className="px-3 py-1.5 bg-white border border-blue-200 hover:bg-blue-100 rounded-lg font-semibold text-blue-900"
+                >
+                  Descartar
+                </button>
+                <button
+                  type="button"
+                  onClick={commitAllPlanDrafts}
+                  className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg font-bold flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Salvar Alterações ({dirtyPlanIds.length})
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Barra de Ações em Lote no Plano de Contas */}
+          {selectedPlanIds.length > 0 && (
+            <div className="bg-neutral-900 text-white rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs shadow-sm">
+              <span className="font-bold">
+                {selectedPlanIds.length} conta(s) selecionada(s)
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idSet = new Set(selectedPlanIds);
+                    const updated = accountsPlan
+                      .filter((a) => idSet.has(a.id))
+                      .map((a) => ({ ...(planDrafts[a.id] || a), ativo: true }));
+                    if (onSaveAccountsBatch) onSaveAccountsBatch(updated);
+                    else updated.forEach((a) => onSaveAccount(a));
+                    setSelectedPlanIds([]);
+                  }}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-semibold"
+                >
+                  Ativar Selecionadas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idSet = new Set(selectedPlanIds);
+                    const updated = accountsPlan
+                      .filter((a) => idSet.has(a.id))
+                      .map((a) => ({ ...(planDrafts[a.id] || a), ativo: false }));
+                    if (onSaveAccountsBatch) onSaveAccountsBatch(updated);
+                    else updated.forEach((a) => onSaveAccount(a));
+                    setSelectedPlanIds([]);
+                  }}
+                  className="px-3 py-1.5 bg-neutral-700 hover:bg-neutral-600 rounded-lg font-semibold"
+                >
+                  Inativar Selecionadas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmPlanBulkDelete(true)}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 rounded-lg font-semibold flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Excluir Selecionadas
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Barra de Criação Rápida Inline */}
+          <form
+            onSubmit={handleQuickAddAccount}
+            className="bg-white border border-neutral-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5 text-xs"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-700">
+                + Adicionar Nova Conta Direto na Planilha
+              </span>
+              <span className="text-[10px] text-neutral-400 hidden sm:inline">
+                Deixe o código em branco para gerar automaticamente (ex: 1.04 / 2.08)
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2">
+              <input
+                type="text"
+                value={quickNewAccount.codigo}
+                onChange={(e) => setQuickNewAccount({ ...quickNewAccount, codigo: e.target.value.toUpperCase() })}
+                placeholder="Código (Auto)"
+                className="lg:col-span-1 px-2.5 py-2 border border-neutral-300 rounded-xl font-mono uppercase bg-neutral-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900"
+              />
+              <select
+                value={quickNewAccount.tipo}
+                onChange={(e) => {
+                  const t = e.target.value as AccountPlanType;
+                  setQuickNewAccount({
+                    ...quickNewAccount,
+                    tipo: t,
+                    grupo: t === 'receita' ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS',
+                  });
+                }}
+                className={`lg:col-span-2 px-2.5 py-2 border rounded-xl font-bold focus:outline-none ${
+                  quickNewAccount.tipo === 'receita'
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                    : 'border-rose-300 bg-rose-50 text-rose-800'
+                }`}
+              >
+                <option value="receita">Receita</option>
+                <option value="despesa">Despesa</option>
+              </select>
+              <input
+                type="text"
+                list="plan-groups-datalist"
+                value={quickNewAccount.grupo}
+                onChange={(e) => setQuickNewAccount({ ...quickNewAccount, grupo: e.target.value.toUpperCase() })}
+                placeholder="Grupo / Categoria"
+                className="lg:col-span-2 px-2.5 py-2 border border-neutral-300 rounded-xl uppercase bg-neutral-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900"
+              />
+              <input
+                type="text"
+                required
+                value={quickNewAccount.nome}
+                onChange={(e) => setQuickNewAccount({ ...quickNewAccount, nome: e.target.value.toUpperCase() })}
+                placeholder="Nome da Conta * (Ex: PRODUTOS QUÍMICOS)"
+                className="lg:col-span-3 px-2.5 py-2 border border-neutral-300 rounded-xl uppercase font-semibold bg-neutral-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900"
+              />
+              <input
+                type="text"
+                value={quickNewAccount.descricao}
+                onChange={(e) => setQuickNewAccount({ ...quickNewAccount, descricao: e.target.value })}
+                placeholder="Descrição / Observação (opcional)"
+                className="lg:col-span-2 px-2.5 py-2 border border-neutral-300 rounded-xl bg-neutral-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900"
+              />
+              <button
+                type="submit"
+                className="lg:col-span-2 px-3 py-2 bg-neutral-900 hover:bg-neutral-800 text-white font-bold rounded-xl flex items-center justify-center gap-1.5 whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                Adicionar Conta
+              </button>
+            </div>
+          </form>
+
+          {/* Visualização Celular: Cards Diretamente Editáveis */}
+          <div className="block md:hidden space-y-3">
+            {filteredPlanAccounts.map((acc) => {
+              const draft = planDrafts[acc.id] || acc;
+              const isDirty = dirtyPlanIds.includes(acc.id);
+              const stats = accountTotalsMap.get(acc.id) || accountTotalsMap.get(acc.nome) || { total: 0, count: 0 };
+              return (
+                <div
+                  key={acc.id}
+                  onBlur={(e) => {
+                    if (isDirty && !e.currentTarget.contains(e.relatedTarget as Node)) {
+                      commitPlanDraftRow(acc.id);
+                    }
+                  }}
+                  className={`bg-white border rounded-xl p-3.5 shadow-2xs space-y-2.5 text-xs ${
+                    isDirty ? 'border-blue-400 bg-blue-50/20' : 'border-neutral-200'
+                  } ${!draft.ativo ? 'opacity-65' : ''}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedPlanIds.includes(acc.id)}
+                        onChange={() =>
+                          setSelectedPlanIds((prev) =>
+                            prev.includes(acc.id) ? prev.filter((x) => x !== acc.id) : [...prev, acc.id]
+                          )
+                        }
+                        className="rounded border-neutral-300"
+                      />
+                      <input
+                        type="text"
+                        value={draft.codigo}
+                        onChange={(e) => updatePlanDraft(acc.id, { codigo: e.target.value.toUpperCase() })}
+                        className="w-16 px-2 py-1 border border-neutral-300 rounded-lg font-mono font-bold uppercase bg-white"
+                      />
+                      <select
+                        value={draft.tipo}
+                        onChange={(e) => updatePlanDraft(acc.id, { tipo: e.target.value as AccountPlanType })}
+                        className={`px-2 py-1 border rounded-lg font-bold ${
+                          draft.tipo === 'receita'
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                            : 'border-rose-300 bg-rose-50 text-rose-800'
+                        }`}
+                      >
+                        <option value="receita">Receita</option>
+                        <option value="despesa">Despesa</option>
+                      </select>
+                    </div>
+                    <span
+                      className={`font-mono font-bold tabular-nums ${
+                        draft.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                      }`}
+                    >
+                      {formatCurrency(stats.total)}
+                    </span>
+                  </div>
+
+                  <input
+                    type="text"
+                    value={draft.nome}
+                    onChange={(e) => updatePlanDraft(acc.id, { nome: e.target.value.toUpperCase() })}
+                    placeholder="Nome da Conta *"
+                    className="w-full px-2.5 py-1.5 border border-neutral-300 rounded-lg font-bold uppercase bg-white"
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      list="plan-groups-datalist"
+                      value={draft.grupo}
+                      onChange={(e) => updatePlanDraft(acc.id, { grupo: e.target.value.toUpperCase() })}
+                      placeholder="Grupo"
+                      className="px-2.5 py-1.5 border border-neutral-300 rounded-lg uppercase bg-white"
+                    />
+                    <input
+                      type="text"
+                      value={draft.descricao || ''}
+                      onChange={(e) => updatePlanDraft(acc.id, { descricao: e.target.value })}
+                      placeholder="Descrição..."
+                      className="px-2.5 py-1.5 border border-neutral-300 rounded-lg bg-white"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-neutral-100">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = { ...draft, ativo: !draft.ativo };
+                        updatePlanDraft(acc.id, { ativo: !draft.ativo });
+                        onSaveAccount(updated);
+                        setDirtyPlanIds((prev) => prev.filter((x) => x !== acc.id));
+                      }}
+                      className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg ${
+                        draft.ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'
+                      }`}
+                    >
+                      {draft.ativo ? 'Ativa' : 'Inativa'}
+                    </button>
+
+                    <div className="flex items-center gap-1.5">
+                      {isDirty && (
+                        <button
+                          type="button"
+                          onClick={() => commitPlanDraftRow(acc.id)}
+                          className="px-2.5 py-1 bg-blue-700 text-white rounded-lg font-bold flex items-center gap-1"
+                        >
+                          <Check className="w-3 h-3" /> Salvar
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDuplicateAccount(acc)}
+                        className="p-1.5 text-neutral-600 hover:bg-neutral-100 rounded-lg"
+                        title="Duplicar conta"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAccountToDelete(acc)}
+                        className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg"
+                        title="Excluir conta"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Tabela Planilha Desktop: Edição Direta em Todas as Células */}
+          <div className="hidden md:block bg-white border border-neutral-200 rounded-2xl overflow-x-auto shadow-xs">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-neutral-100 text-neutral-700 border-b border-neutral-200">
+                <tr>
+                  <th className="py-2.5 px-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={
+                        filteredPlanAccounts.length > 0 &&
+                        selectedPlanIds.length === filteredPlanAccounts.length
+                      }
+                      onChange={() => {
+                        if (selectedPlanIds.length === filteredPlanAccounts.length) {
+                          setSelectedPlanIds([]);
+                        } else {
+                          setSelectedPlanIds(filteredPlanAccounts.map((a) => a.id));
+                        }
+                      }}
+                      className="rounded border-neutral-300"
+                    />
+                  </th>
+                  <th className="py-2.5 px-2 font-semibold w-24">Código</th>
+                  <th className="py-2.5 px-2 font-semibold w-28">Tipo</th>
+                  <th className="py-2.5 px-2 font-semibold w-44">Grupo / Categoria</th>
+                  <th className="py-2.5 px-2 font-semibold min-w-[200px]">Nome da Conta</th>
+                  <th className="py-2.5 px-2 font-semibold min-w-[180px]">Descrição</th>
+                  <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">Movimentado</th>
+                  <th className="py-2.5 px-2 font-semibold text-center w-24">Status</th>
+                  <th className="py-2.5 px-3 font-semibold text-center w-32">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-200">
+                {filteredPlanAccounts.map((acc) => {
+                  const draft = planDrafts[acc.id] || acc;
+                  const isDirty = dirtyPlanIds.includes(acc.id);
+                  const stats =
+                    accountTotalsMap.get(acc.id) ||
+                    accountTotalsMap.get(acc.nome) || { total: 0, count: 0 };
+
+                  return (
+                    <tr
+                      key={acc.id}
+                      onBlur={(e) => {
+                        if (isDirty && !e.currentTarget.contains(e.relatedTarget as Node)) {
+                          commitPlanDraftRow(acc.id);
+                        }
+                      }}
+                      className={`transition-colors ${
+                        isDirty ? 'bg-blue-50/40' : 'hover:bg-neutral-50/70'
+                      } ${!draft.ativo ? 'opacity-65' : ''}`}
+                    >
+                      <td className="py-2 px-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedPlanIds.includes(acc.id)}
+                          onChange={() =>
+                            setSelectedPlanIds((prev) =>
+                              prev.includes(acc.id) ? prev.filter((x) => x !== acc.id) : [...prev, acc.id]
+                            )
+                          }
+                          className="rounded border-neutral-300"
+                        />
+                      </td>
+
+                      <td className="py-1.5 px-2">
+                        <input
+                          type="text"
+                          value={draft.codigo}
+                          onChange={(e) => updatePlanDraft(acc.id, { codigo: e.target.value.toUpperCase() })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              commitPlanDraftRow(acc.id);
+                            }
+                          }}
+                          className="w-20 px-2 py-1.5 border border-neutral-200 hover:border-neutral-300 focus:border-neutral-900 rounded-lg font-mono font-bold uppercase bg-white focus:outline-none"
+                        />
+                      </td>
+
+                      <td className="py-1.5 px-2">
+                        <select
+                          value={draft.tipo}
+                          onChange={(e) => {
+                            const nextTipo = e.target.value as AccountPlanType;
+                            updatePlanDraft(acc.id, { tipo: nextTipo });
+                          }}
+                          className={`w-full px-2 py-1.5 border rounded-lg font-bold text-xs focus:outline-none ${
+                            draft.tipo === 'receita'
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                              : 'border-rose-300 bg-rose-50 text-rose-800'
+                          }`}
+                        >
+                          <option value="receita">Receita</option>
+                          <option value="despesa">Despesa</option>
+                        </select>
+                      </td>
+
+                      <td className="py-1.5 px-2">
+                        <input
+                          type="text"
+                          list="plan-groups-datalist"
+                          value={draft.grupo}
+                          onChange={(e) => updatePlanDraft(acc.id, { grupo: e.target.value.toUpperCase() })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              commitPlanDraftRow(acc.id);
+                            }
+                          }}
+                          className="w-full px-2 py-1.5 border border-neutral-200 hover:border-neutral-300 focus:border-neutral-900 rounded-lg uppercase bg-white focus:outline-none"
+                        />
+                      </td>
+
+                      <td className="py-1.5 px-2">
+                        <input
+                          type="text"
+                          value={draft.nome}
+                          onChange={(e) => updatePlanDraft(acc.id, { nome: e.target.value.toUpperCase() })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              commitPlanDraftRow(acc.id);
+                            }
+                          }}
+                          className="w-full px-2.5 py-1.5 border border-neutral-200 hover:border-neutral-300 focus:border-neutral-900 rounded-lg font-semibold uppercase bg-white focus:outline-none"
+                        />
+                      </td>
+
+                      <td className="py-1.5 px-2">
+                        <input
+                          type="text"
+                          value={draft.descricao || ''}
+                          placeholder="Adicionar descrição..."
+                          onChange={(e) => updatePlanDraft(acc.id, { descricao: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              commitPlanDraftRow(acc.id);
+                            }
+                          }}
+                          className="w-full px-2 py-1.5 border border-neutral-200 hover:border-neutral-300 focus:border-neutral-900 rounded-lg bg-white text-neutral-700 focus:outline-none"
+                        />
+                      </td>
+
+                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                        <span
+                          className={`font-mono font-bold tabular-nums block ${
+                            draft.tipo === 'receita' ? 'text-emerald-700' : 'text-rose-700'
+                          }`}
+                        >
+                          {formatCurrency(stats.total)}
+                        </span>
+                        <span className="text-[10px] text-neutral-400 font-mono">
+                          {stats.count} {stats.count === 1 ? 'lanç.' : 'lançs.'}
+                        </span>
+                      </td>
+
+                      <td className="py-1.5 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = { ...draft, ativo: !draft.ativo };
+                            updatePlanDraft(acc.id, { ativo: !draft.ativo });
+                            onSaveAccount(updated);
+                            setDirtyPlanIds((prev) => prev.filter((x) => x !== acc.id));
+                          }}
+                          className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap ${
+                            draft.ativo
+                              ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                              : 'text-neutral-500 bg-neutral-100 hover:bg-neutral-200'
+                          }`}
+                        >
+                          {draft.ativo ? 'Ativa' : 'Inativa'}
+                        </button>
+                      </td>
+
+                      <td className="py-1.5 px-3 text-center whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => commitPlanDraftRow(acc.id)}
+                            disabled={!isDirty}
+                            title={isDirty ? 'Salvar alterações desta conta' : 'Sem alterações pendentes'}
+                            className={`p-1.5 rounded transition-colors ${
+                              isDirty
+                                ? 'bg-blue-700 text-white hover:bg-blue-800 shadow-2xs'
+                                : 'text-neutral-300 cursor-default'
+                            }`}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDuplicateAccount(acc)}
+                            title="Duplicar conta"
+                            className="p-1.5 text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100 rounded transition-colors"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditAccountModal(acc)}
+                            title="Abrir formulário completo"
+                            className="p-1.5 text-neutral-600 hover:text-blue-700 hover:bg-blue-50 rounded transition-colors"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAccountToDelete(acc)}
+                            title="Apagar conta"
+                            className="p-1.5 text-neutral-500 hover:text-rose-700 hover:bg-rose-50 rounded transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {filteredPlanAccounts.length === 0 && (
+              <div className="py-10 text-center space-y-2 text-neutral-500">
+                <FileSpreadsheet className="w-8 h-8 text-neutral-300 mx-auto" />
+                <p className="text-xs font-semibold text-neutral-700">
+                  Nenhuma conta encontrada neste filtro
+                </p>
+                <p className="text-[11px] text-neutral-400">
+                  Use a linha acima para adicionar contas diretamente ou importe seu Plano de Contas em Excel.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2047,14 +3450,47 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-neutral-700 mb-1">Banco / Caixa</label>
-                  <input
-                    type="text"
-                    value={entryForm.banco}
-                    onChange={(e) => setEntryForm({ ...entryForm, banco: e.target.value.toUpperCase() })}
-                    placeholder="SICREDI, CAIXA INTERNO, ITAÚ..."
-                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase"
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-semibold text-neutral-700">Banco / Conta *</label>
+                    <button
+                      type="button"
+                      onClick={() => openNewBankModal(true)}
+                      className="text-[11px] font-bold text-blue-700 hover:underline flex items-center gap-0.5"
+                    >
+                      <Plus className="w-3 h-3" /> Nova Conta
+                    </button>
+                  </div>
+                  <select
+                    value={entryForm.bancoId || '__legacy__'}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '__legacy__') {
+                        setEntryForm({ ...entryForm, bancoId: '', banco: '' });
+                      } else {
+                        const b = bankAccounts.find((x) => x.id === val);
+                        if (b) {
+                          setEntryForm({ ...entryForm, bancoId: b.id, banco: b.nome });
+                        }
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white uppercase font-semibold"
+                  >
+                    {bankAccounts.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.nome} ({b.tipoConta})
+                      </option>
+                    ))}
+                    <option value="__legacy__">-- Outro (Digitar manualmente) --</option>
+                  </select>
+                  {!entryForm.bancoId && (
+                    <input
+                      type="text"
+                      value={entryForm.banco}
+                      onChange={(e) => setEntryForm({ ...entryForm, banco: e.target.value.toUpperCase() })}
+                      placeholder="SICREDI, CAIXA INTERNO, ITAÚ..."
+                      className="mt-2 w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -2415,6 +3851,182 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         </div>
       )}
 
+      {/* ===================================================================== */}
+      {/* MODAL: NOVA / EDITAR CONTA BANCÁRIA OU CAIXA                          */}
+      {/* ===================================================================== */}
+      {isBankModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-neutral-950/60 backdrop-blur-xs overflow-y-auto">
+          <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-neutral-200 overflow-hidden my-auto max-h-[95dvh] flex flex-col">
+            <div className="px-5 py-3.5 border-b border-neutral-200 bg-neutral-50 flex items-center justify-between">
+              <h2 className="text-sm font-bold text-neutral-950 flex items-center gap-2">
+                <Landmark className="w-4 h-4 text-emerald-700" />
+                {editingBank ? 'Editar Conta Bancária / Caixa' : 'Nova Conta Bancária / Caixa'}
+              </h2>
+              <button
+                onClick={() => {
+                  setIsBankModalOpen(false);
+                  setSelectNewBankForEntry(false);
+                }}
+                className="p-1 text-neutral-400 hover:text-neutral-700 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveBankModal} className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Nome / Apelido da Conta *</label>
+                  <input
+                    type="text"
+                    required
+                    value={bankForm.nome}
+                    onChange={(e) => setBankForm({ ...bankForm, nome: e.target.value.toUpperCase() })}
+                    placeholder="EX: SICREDI EMPRESA / CAIXA INTERNO"
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Instituição Financeira *</label>
+                  <input
+                    type="text"
+                    list="bank-suggestions"
+                    value={bankForm.banco}
+                    onChange={(e) => setBankForm({ ...bankForm, banco: e.target.value.toUpperCase() })}
+                    placeholder="EX: SICREDI / 748"
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Tipo de Conta</label>
+                  <select
+                    value={bankForm.tipoConta}
+                    onChange={(e) => setBankForm({ ...bankForm, tipoConta: e.target.value as BankAccountType })}
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white"
+                  >
+                    {BANK_ACCOUNT_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Agência</label>
+                  <input
+                    type="text"
+                    value={bankForm.agencia}
+                    onChange={(e) => setBankForm({ ...bankForm, agencia: e.target.value.toUpperCase() })}
+                    placeholder="0001"
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl font-mono uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Nº Conta</label>
+                  <input
+                    type="text"
+                    value={bankForm.numeroConta}
+                    onChange={(e) => setBankForm({ ...bankForm, numeroConta: e.target.value.toUpperCase() })}
+                    placeholder="12345-6"
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl font-mono uppercase"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Saldo Inicial (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={bankForm.saldoInicial}
+                    onChange={(e) => setBankForm({ ...bankForm, saldoInicial: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl font-mono font-bold text-right"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Data Base do Saldo</label>
+                  <input
+                    type="date"
+                    value={bankForm.dataSaldoInicial}
+                    onChange={(e) => setBankForm({ ...bankForm, dataSaldoInicial: e.target.value })}
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-neutral-700 mb-1">Chave PIX (Opcional)</label>
+                <input
+                  type="text"
+                  value={bankForm.chavePix || ''}
+                  onChange={(e) => setBankForm({ ...bankForm, chavePix: e.target.value })}
+                  placeholder="CNPJ, E-mail, Telefone ou Chave Aleatória"
+                  className="w-full px-3 py-2 border border-neutral-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-neutral-700 mb-1">Observações</label>
+                <input
+                  type="text"
+                  value={bankForm.observacoes || ''}
+                  onChange={(e) => setBankForm({ ...bankForm, observacoes: e.target.value.toUpperCase() })}
+                  placeholder="Gerente, limite, finalidade da conta..."
+                  className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 pt-1 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={bankForm.ativo}
+                  onChange={(e) => setBankForm({ ...bankForm, ativo: e.target.checked })}
+                  className="rounded border-neutral-300"
+                />
+                <span className="font-semibold text-neutral-800">Conta ativa para novos lançamentos e extratos</span>
+              </label>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-neutral-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBankModalOpen(false);
+                    setSelectNewBankForEntry(false);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-neutral-700 bg-neutral-100 hover:bg-neutral-200 rounded-xl"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 rounded-xl flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  Salvar Conta Bancária
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Listas de Sugestões (Datalists) */}
+      <datalist id="bank-suggestions">
+        {BANK_SUGGESTIONS.map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
+
+      <datalist id="plan-groups-datalist">
+        {planGroupsList.map((g) => (
+          <option key={g} value={g} />
+        ))}
+      </datalist>
+
       {/* Confirmações de Exclusão */}
       <ConfirmModal
         isOpen={!!entryToDelete}
@@ -2445,11 +4057,45 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
         isOpen={!!accountToDelete}
         onCancel={() => setAccountToDelete(null)}
         onConfirm={() => {
-          if (accountToDelete) onDeleteAccount(accountToDelete.id);
+          if (accountToDelete) {
+            onDeleteAccount(accountToDelete.id);
+            setDirtyPlanIds((prev) => prev.filter((x) => x !== accountToDelete.id));
+            setSelectedPlanIds((prev) => prev.filter((x) => x !== accountToDelete.id));
+          }
           setAccountToDelete(null);
         }}
         title="Apagar Conta do Plano?"
         message={`Deseja excluir a conta "${accountToDelete?.codigo} - ${accountToDelete?.nome}" do seu Plano de Contas?`}
+        confirmLabel="Sim, Excluir Conta"
+      />
+
+      <ConfirmModal
+        isOpen={confirmPlanBulkDelete}
+        onCancel={() => setConfirmPlanBulkDelete(false)}
+        onConfirm={() => {
+          if (onDeleteAccountsBatch) {
+            onDeleteAccountsBatch(selectedPlanIds);
+          } else {
+            selectedPlanIds.forEach((id) => onDeleteAccount(id));
+          }
+          setDirtyPlanIds((prev) => prev.filter((x) => !selectedPlanIds.includes(x)));
+          setSelectedPlanIds([]);
+          setConfirmPlanBulkDelete(false);
+        }}
+        title="Apagar Contas Selecionadas?"
+        message={`Tem certeza que deseja excluir ${selectedPlanIds.length} conta(s) selecionada(s) do Plano de Contas?`}
+        confirmLabel="Sim, Excluir Contas"
+      />
+
+      <ConfirmModal
+        isOpen={!!bankToDelete}
+        onCancel={() => setBankToDelete(null)}
+        onConfirm={() => {
+          if (bankToDelete) onDeleteBankAccount(bankToDelete.id);
+          setBankToDelete(null);
+        }}
+        title="Apagar Conta Bancária?"
+        message={`Deseja excluir a conta bancária "${bankToDelete?.nome}"? Os lançamentos financeiros já salvos continuarão preservados no histórico.`}
         confirmLabel="Sim, Excluir Conta"
       />
 

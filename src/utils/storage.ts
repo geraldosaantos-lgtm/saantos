@@ -7,6 +7,7 @@ import {
   AccountPlanItem,
   FinancialEntry,
   FinancialCustomField,
+  BankAccount,
 } from '../types';
 import {
   defaultGoalsCalendarConfig,
@@ -500,6 +501,35 @@ export const defaultFinancialCustomFields: FinancialCustomField[] = [
   },
 ];
 
+export const defaultBankAccounts: BankAccount[] = [
+  {
+    id: 'bank-sicredi',
+    nome: 'SICREDI',
+    banco: 'SICREDI / 748',
+    agencia: '0179',
+    numeroConta: '19842-5',
+    tipoConta: 'Conta Corrente',
+    saldoInicial: 0,
+    dataSaldoInicial: '2026-01-01',
+    chavePix: '31999795303',
+    observacoes: 'CONTA PRINCIPAL DA EMPRESA',
+    ativo: true,
+  },
+  {
+    id: 'bank-caixa',
+    nome: 'CAIXA INTERNO',
+    banco: 'CAIXA FÍSICO (ESPÉCIE)',
+    agencia: '',
+    numeroConta: 'CAIXA-01',
+    tipoConta: 'Caixa Físico',
+    saldoInicial: 0,
+    dataSaldoInicial: '2026-01-01',
+    chavePix: '',
+    observacoes: 'CAIXA DE MOVIMENTAÇÃO DIÁRIA NO PÁTIO',
+    ativo: true,
+  },
+];
+
 export const DEMO_LAUNCH_IDS = ['lnc-1', 'lnc-2', 'lnc-3'];
 export const DEMO_LAUNCH_OS = ['OS-00101', 'OS-00102', 'OS-00103'];
 
@@ -512,6 +542,7 @@ export interface AppState {
   accountsPlan: AccountPlanItem[];
   financialEntries: FinancialEntry[];
   financialCustomFields: FinancialCustomField[];
+  bankAccounts: BankAccount[];
 }
 
 export const loadStoredData = (): AppState => {
@@ -609,18 +640,33 @@ export const loadStoredData = (): AppState => {
           : [],
       }));
 
-      const rawAccountsPlan: AccountPlanItem[] =
-        Array.isArray(parsed.accountsPlan) && parsed.accountsPlan.length > 0
-          ? parsed.accountsPlan.map((a: any) => ({
-              id: a.id || `acc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              codigo: (a.codigo || '').toUpperCase(),
-              nome: (a.nome || '').toUpperCase(),
-              tipo: a.tipo === 'receita' ? 'receita' : 'despesa',
-              grupo: (a.grupo || 'GERAL').toUpperCase(),
-              descricao: a.descricao || '',
-              ativo: a.ativo !== false,
-            }))
-          : defaultAccountsPlan;
+      const rawAccountsPlan: AccountPlanItem[] = Array.isArray(parsed.accountsPlan)
+        ? parsed.accountsPlan.map((a: any) => ({
+            id: a.id || `acc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            codigo: (a.codigo || '').toUpperCase(),
+            nome: (a.nome || '').toUpperCase(),
+            tipo: a.tipo === 'receita' ? 'receita' : 'despesa',
+            grupo: (a.grupo || 'GERAL').toUpperCase(),
+            descricao: a.descricao || '',
+            ativo: a.ativo !== false,
+          }))
+        : defaultAccountsPlan;
+
+      const rawBankAccounts: BankAccount[] = Array.isArray(parsed.bankAccounts)
+        ? parsed.bankAccounts.map((b: any) => ({
+            id: b.id || `bank-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            nome: (b.nome || 'CONTA BANCÁRIA').toUpperCase(),
+            banco: (b.banco || b.nome || '').toUpperCase(),
+            agencia: (b.agencia || '').toUpperCase(),
+            numeroConta: (b.numeroConta || '').toUpperCase(),
+            tipoConta: b.tipoConta || 'Conta Corrente',
+            saldoInicial: Number(b.saldoInicial) || 0,
+            dataSaldoInicial: b.dataSaldoInicial || '2026-01-01',
+            chavePix: b.chavePix || '',
+            observacoes: (b.observacoes || '').toUpperCase(),
+            ativo: b.ativo !== false,
+          }))
+        : defaultBankAccounts;
 
       const rawFinancialEntries: FinancialEntry[] = Array.isArray(parsed.financialEntries)
         ? parsed.financialEntries.map((f: any) => ({
@@ -634,6 +680,7 @@ export const loadStoredData = (): AppState => {
             grupo: (f.grupo || '').toUpperCase(),
             valor: Math.abs(Number(f.valor) || 0),
             banco: (f.banco || 'CAIXA').toUpperCase(),
+            bancoId: f.bancoId || '',
             formaPagamento: (f.formaPagamento || '').toUpperCase(),
             documento: (f.documento || '').toUpperCase(),
             status: f.status === 'Pendente' ? 'Pendente' : 'Conciliado',
@@ -661,6 +708,7 @@ export const loadStoredData = (): AppState => {
         accountsPlan: rawAccountsPlan,
         financialEntries: rawFinancialEntries,
         financialCustomFields: rawCustomFields,
+        bankAccounts: rawBankAccounts,
       };
 
       // Salva o estado normalizado em maiúsculo (exceto e-mails)
@@ -681,6 +729,7 @@ export const loadStoredData = (): AppState => {
     accountsPlan: defaultAccountsPlan,
     financialEntries: [],
     financialCustomFields: defaultFinancialCustomFields,
+    bankAccounts: defaultBankAccounts,
   };
 };
 

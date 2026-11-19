@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   FinancialEntry,
   AccountPlanItem,
+  BankAccount,
   ServiceLaunch,
   CompanyProfile,
 } from '../types';
@@ -20,14 +21,16 @@ import {
   SlidersHorizontal,
   ArrowRight,
   Layers,
+  CreditCard,
 } from 'lucide-react';
 
 interface FinancialDashboardProps {
   company: CompanyProfile;
   entries: FinancialEntry[];
   accountsPlan: AccountPlanItem[];
+  bankAccounts?: BankAccount[];
   launches: ServiceLaunch[];
-  onOpenFinanceiro: (subTab?: 'movimentacoes' | 'extrato' | 'plano') => void;
+  onOpenFinanceiro: (subTab?: 'movimentacoes' | 'extrato' | 'bancos' | 'plano') => void;
 }
 
 type FinPeriod = 'hoje' | 'semana' | 'mes' | 'mes_anterior' | 'ano' | 'todos';
@@ -36,6 +39,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
   company,
   entries,
   accountsPlan,
+  bankAccounts = [],
   launches,
   onOpenFinanceiro,
 }) => {
@@ -165,6 +169,56 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
       banks: Array.from(bankStats.values()).sort((a, b) => b.receitas - a.receitas),
     };
   }, [filteredEntries]);
+
+  // Saldos reais consolidados por Conta Bancária cadastrada + movimentação do período
+  const bankSummaries = useMemo(() => {
+    const items = bankAccounts.map((bank) => {
+      let allEntradas = 0;
+      let allSaidas = 0;
+      let periodEntradas = 0;
+      let periodSaidas = 0;
+
+      const matchEntry = (e: FinancialEntry) =>
+        e.bancoId === bank.id ||
+        (!e.bancoId && (e.banco || '').trim().toUpperCase() === bank.nome.trim().toUpperCase());
+
+      entries.forEach((e) => {
+        if (!matchEntry(e)) return;
+        if (bank.dataSaldoInicial && e.data && e.data < bank.dataSaldoInicial) return;
+        if (e.status === 'Pendente') return;
+        const val = Math.abs(Number(e.valor) || 0);
+        if (e.tipo === 'receita') allEntradas += val;
+        else allSaidas += val;
+      });
+
+      filteredEntries.forEach((e) => {
+        if (!matchEntry(e)) return;
+        const val = Math.abs(Number(e.valor) || 0);
+        if (e.tipo === 'receita') periodEntradas += val;
+        else periodSaidas += val;
+      });
+
+      const saldoAtual = (Number(bank.saldoInicial) || 0) + allEntradas - allSaidas;
+      return {
+        id: bank.id,
+        nome: bank.nome,
+        subtitulo: `${bank.banco} · ${bank.tipoConta}`,
+        ativo: bank.ativo,
+        saldoAtual,
+        periodEntradas,
+        periodSaidas,
+      };
+    });
+
+    const registeredNames = new Set(bankAccounts.map((b) => b.nome.trim().toUpperCase()));
+    const registeredIds = new Set(bankAccounts.map((b) => b.id));
+    const unregistered = metrics.banks.filter((b) => {
+      const upper = b.banco.trim().toUpperCase();
+      return !registeredNames.has(upper) && !registeredIds.has(b.banco);
+    });
+
+    return { items, unregistered };
+  }, [bankAccounts, entries, filteredEntries, metrics.banks]);
 
   // Série do Gráfico de Fluxo de Caixa (Mensal: últimos 6 meses ou Diário: últimos 14 dias)
   const chartSeries = useMemo(() => {
@@ -417,11 +471,18 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
               Importar Extrato / Modelo Editável
             </button>
             <button
+              onClick={() => onOpenFinanceiro('bancos')}
+              className="px-4 py-2 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5"
+            >
+              <CreditCard className="w-4 h-4" />
+              Contas Bancárias ({bankAccounts.length})
+            </button>
+            <button
               onClick={() => onOpenFinanceiro('plano')}
               className="px-4 py-2 text-xs font-semibold text-neutral-800 bg-neutral-100 hover:bg-neutral-200 rounded-xl transition-colors flex items-center gap-1.5"
             >
               <SlidersHorizontal className="w-4 h-4" />
-              Ver Plano de Contas ({accountsPlan.length})
+              Plano de Contas ({accountsPlan.length})
             </button>
           </div>
         </div>
@@ -635,14 +696,52 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
 
           {/* Saldos por Banco / Conta & Últimas Movimentações */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            {/* Resumo por Banco */}
+            {/* Resumo por Banco / Conta Bancária */}
             <div className="bg-white border border-neutral-200 rounded-2xl p-5 shadow-xs space-y-3">
-              <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider flex items-center gap-2">
-                <Landmark className="w-4 h-4 text-neutral-700" />
-                Movimentação por Banco / Caixa
-              </h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider flex items-center gap-2">
+                  <Landmark className="w-4 h-4 text-neutral-700" />
+                  Contas Bancárias & Caixas
+                </h3>
+                <button
+                  onClick={() => onOpenFinanceiro('bancos')}
+                  className="text-xs font-semibold text-neutral-600 hover:text-neutral-900 flex items-center gap-1 whitespace-nowrap shrink-0"
+                >
+                  Gerenciar <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
               <div className="space-y-2.5">
-                {metrics.banks.map((b) => {
+                {bankSummaries.items.map((b) => (
+                  <div
+                    key={b.id}
+                    className={`p-3 bg-neutral-50 border border-neutral-200 rounded-xl space-y-1 text-xs ${
+                      !b.ativo ? 'opacity-60' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="font-bold text-neutral-900 block truncate">{b.nome}</span>
+                        <span className="text-[10px] text-neutral-400 block truncate">{b.subtitulo}</span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[9px] uppercase text-neutral-400 block">Saldo Atual</span>
+                        <span
+                          className={`font-mono font-bold tabular-nums ${
+                            b.saldoAtual >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                          }`}
+                        >
+                          {formatCurrency(b.saldoAtual)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-neutral-500 pt-1 border-t border-neutral-200/70">
+                      <span className="text-emerald-700">+{formatCurrency(b.periodEntradas)}</span>
+                      <span className="text-rose-700">-{formatCurrency(b.periodSaidas)}</span>
+                    </div>
+                  </div>
+                ))}
+
+                {bankSummaries.unregistered.map((b) => {
                   const net = b.receitas - b.despesas;
                   return (
                     <div
@@ -652,14 +751,14 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-neutral-900">{b.banco}</span>
                         <span
-                          className={`font-mono font-bold ${
+                          className={`font-mono font-bold tabular-nums ${
                             net >= 0 ? 'text-emerald-700' : 'text-rose-700'
                           }`}
                         >
                           {formatCurrency(net)}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-[11px] font-mono text-neutral-500">
+                      <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-neutral-500">
                         <span>+{formatCurrency(b.receitas)}</span>
                         <span>-{formatCurrency(b.despesas)}</span>
                       </div>

@@ -8,6 +8,7 @@ export interface ParsedBankRow {
   tipo: 'receita' | 'despesa';
   valor: number;
   banco: string;
+  bancoId?: string;
   formaPagamento: string;
   documento: string;
   contaId: string;
@@ -723,3 +724,92 @@ export const exportFinancialEntriesToExcel = (
   XLSX.utils.book_append_sheet(wb, ws, 'Financeiro');
   XLSX.writeFile(wb, `Financeiro_AutoLava_${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
+
+/**
+ * Exporta o Plano de Contas editável para Excel (.xlsx)
+ */
+export const exportAccountsPlanToExcel = (accounts: AccountPlanItem[]) => {
+  const headers = ['Código', 'Tipo (Receita/Despesa)', 'Grupo / Categoria', 'Nome da Conta', 'Descrição', 'Status'];
+  const rows = [...accounts]
+    .sort((a, b) => a.codigo.localeCompare(b.codigo))
+    .map((a) => [
+      a.codigo,
+      a.tipo === 'receita' ? 'Receita' : 'Despesa',
+      a.grupo,
+      a.nome,
+      a.descricao || '',
+      a.ativo ? 'Ativa' : 'Inativa',
+    ]);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Plano_de_Contas');
+  XLSX.writeFile(wb, `Plano_de_Contas_AutoLava_${new Date().toISOString().slice(0, 10)}.xlsx`);
+};
+
+/**
+ * Importa Plano de Contas a partir de arquivo Excel (.xlsx/.xls) ou CSV
+ */
+export const parseAccountsPlanFile = async (file: File): Promise<AccountPlanItem[]> => {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) return [];
+  const matrix = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: '' });
+  const nonEmpty = matrix.filter((r) => Array.isArray(r) && r.some((c) => String(c ?? '').trim() !== ''));
+  if (nonEmpty.length === 0) return [];
+
+  let headerIdx = -1;
+  let colMap = { codigo: -1, tipo: -1, grupo: -1, nome: -1, descricao: -1, status: -1 };
+  for (let i = 0; i < Math.min(5, nonEmpty.length); i++) {
+    const norm = nonEmpty[i].map((c) =>
+      String(c ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase()
+    );
+    if (norm.some((c) => c.includes('nome') || c.includes('conta') || c.includes('codigo'))) {
+      headerIdx = i;
+      norm.forEach((c, idx) => {
+        if (colMap.codigo === -1 && c.includes('cod')) colMap.codigo = idx;
+        else if (colMap.tipo === -1 && (c.includes('tipo') || c.includes('natureza'))) colMap.tipo = idx;
+        else if (colMap.grupo === -1 && (c.includes('grupo') || c.includes('categ'))) colMap.grupo = idx;
+        else if (colMap.nome === -1 && (c.includes('nome') || c.includes('conta') || c.includes('titulo'))) colMap.nome = idx;
+        else if (colMap.descricao === -1 && c.includes('descr')) colMap.descricao = idx;
+        else if (colMap.status === -1 && (c.includes('status') || c.includes('ativ'))) colMap.status = idx;
+      });
+      break;
+    }
+  }
+
+  const startRow = headerIdx >= 0 ? headerIdx + 1 : 0;
+  const imported: AccountPlanItem[] = [];
+  for (let i = startRow; i < nonEmpty.length; i++) {
+    const r = nonEmpty[i];
+    const codigo = String((colMap.codigo >= 0 ? r[colMap.codigo] : r[0]) ?? '').trim().toUpperCase();
+    const rawTipo = String((colMap.tipo >= 0 ? r[colMap.tipo] : r[1]) ?? '').trim().toUpperCase();
+    const grupo = String((colMap.grupo >= 0 ? r[colMap.grupo] : r[2]) ?? '').trim().toUpperCase();
+    const nome = String((colMap.nome >= 0 ? r[colMap.nome] : r[3] ?? r[1]) ?? '').trim().toUpperCase();
+    const descricao = String((colMap.descricao >= 0 ? r[colMap.descricao] : r[4]) ?? '').trim();
+    const rawStatus = String((colMap.status >= 0 ? r[colMap.status] : '') ?? '').trim().toUpperCase();
+
+    if (!nome) continue;
+    const isReceita =
+      rawTipo.startsWith('R') ||
+      rawTipo.includes('CRED') ||
+      rawTipo.includes('ENTR') ||
+      codigo.startsWith('1.');
+
+    imported.push({
+      id: `acc-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
+      codigo: codigo || `${isReceita ? '1' : '2'}.${String(imported.length + 1).padStart(2, '0')}`,
+      tipo: isReceita ? 'receita' : 'despesa',
+      grupo: grupo || (isReceita ? 'RECEITAS OPERACIONAIS' : 'DESPESAS OPERACIONAIS'),
+      nome,
+      descricao,
+      ativo: rawStatus ? !rawStatus.includes('INATIV') : true,
+    });
+  }
+  return imported;
+};
+

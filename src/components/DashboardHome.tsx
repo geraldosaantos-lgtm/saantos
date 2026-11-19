@@ -8,6 +8,7 @@ import {
   ActiveTab,
   FinancialEntry,
   AccountPlanItem,
+  BankAccount,
 } from '../types';
 import {
   formatCurrency,
@@ -51,9 +52,10 @@ interface DashboardHomeProps {
   services?: ServiceItem[];
   financialEntries?: FinancialEntry[];
   accountsPlan?: AccountPlanItem[];
+  bankAccounts?: BankAccount[];
   onOpenLancamento: () => void;
   onNavigateTab: (tab: ActiveTab) => void;
-  onOpenFinanceiro?: (subTab?: 'movimentacoes' | 'extrato' | 'plano') => void;
+  onOpenFinanceiro?: (subTab?: 'movimentacoes' | 'extrato' | 'bancos' | 'plano') => void;
   onOpenCompanyModal: () => void;
   onSendEmail?: (launch: ServiceLaunch) => void;
 }
@@ -66,6 +68,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   services = [],
   financialEntries = [],
   accountsPlan = [],
+  bankAccounts = [],
   onOpenLancamento,
   onNavigateTab,
   onOpenFinanceiro,
@@ -181,6 +184,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           company={company}
           entries={financialEntries}
           accountsPlan={accountsPlan}
+          bankAccounts={bankAccounts}
           launches={launches}
           onOpenFinanceiro={(subTab) => {
             if (onOpenFinanceiro) onOpenFinanceiro(subTab);

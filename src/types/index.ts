@@ -159,6 +159,27 @@ export interface FinancialCustomField {
   ativo: boolean;
 }
 
+export type BankAccountType =
+  | 'Conta Corrente'
+  | 'Poupança'
+  | 'Caixa Físico'
+  | 'Carteira Digital'
+  | 'Investimento';
+
+export interface BankAccount {
+  id: string;
+  nome: string; // Apelido curto exibido nos lançamentos (ex: SICREDI, CAIXA INTERNO)
+  banco: string; // Instituição (ex: SICREDI / 748, ITAÚ / 341)
+  agencia: string;
+  numeroConta: string;
+  tipoConta: BankAccountType;
+  saldoInicial: number;
+  dataSaldoInicial: string; // YYYY-MM-DD
+  chavePix?: string;
+  observacoes?: string;
+  ativo: boolean;
+}
+
 export interface FinancialEntry {
   id: string;
   data: string; // YYYY-MM-DD
@@ -169,6 +190,7 @@ export interface FinancialEntry {
   grupo: string;
   valor: number;
   banco: string;
+  bancoId?: string;
   formaPagamento?: string;
   documento?: string;
   status: 'Conciliado' | 'Pendente';

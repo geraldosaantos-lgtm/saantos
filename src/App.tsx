@@ -9,6 +9,7 @@ import {
   AccountPlanItem,
   FinancialEntry,
   FinancialCustomField,
+  BankAccount,
 } from './types';
 import {
   loadStoredData,
@@ -19,6 +20,7 @@ import {
   findPlateOwner,
   defaultAccountsPlan,
   defaultFinancialCustomFields,
+  defaultBankAccounts,
 } from './utils/storage';
 import { generateLaunchEmailContent, openEmailClient } from './utils/emailService';
 import { getSupabaseConfig, getSupabaseClient } from './lib/supabase';
@@ -39,6 +41,8 @@ import {
   deleteFinancialEntryFromSupabase,
   syncFinancialCustomFieldToSupabase,
   deleteFinancialCustomFieldFromSupabase,
+  syncBankAccountToSupabase,
+  deleteBankAccountFromSupabase,
   uploadAllLocalDataToSupabase,
 } from './services/supabaseService';
 import { DashboardHome } from './components/DashboardHome';
@@ -90,7 +94,7 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
   const [infraInitialTab, setInfraInitialTab] = useState<'supabase' | 'migrations' | 'sql' | 'vercel' | 'github'>('supabase');
-  const [financeiroInitialSubTab, setFinanceiroInitialSubTab] = useState<'movimentacoes' | 'extrato' | 'plano'>('movimentacoes');
+  const [financeiroInitialSubTab, setFinanceiroInitialSubTab] = useState<'movimentacoes' | 'extrato' | 'bancos' | 'plano'>('movimentacoes');
 
   // Inicialização e Sincronização em Tempo Real (Celular + Computador)
   useEffect(() => {
@@ -176,6 +180,16 @@ export default function App() {
                 ? [...remoteCustomFields, ...localOnlyFields]
                 : prev.financialCustomFields;
 
+            // Contas Bancárias
+            const remoteBankAccounts = remoteData.bankAccounts || [];
+            const remoteBankIds = new Set(remoteBankAccounts.map((b) => b.id));
+            const localOnlyBanks = (prev.bankAccounts || []).filter((b) => !remoteBankIds.has(b.id));
+            if (localOnlyBanks.length > 0) {
+              localOnlyBanks.forEach((b) => syncBankAccountToSupabase(b));
+            }
+            const mergedBankAccounts =
+              remoteBankAccounts.length > 0 ? [...remoteBankAccounts, ...localOnlyBanks] : prev.bankAccounts;
+
             // Movimentações Financeiras
             const remoteFinancialEntries = remoteData.financialEntries || [];
             const remoteFinIds = new Set(remoteFinancialEntries.map((e) => e.id));
@@ -203,6 +217,7 @@ export default function App() {
               accountsPlan: mergedAccountsPlan,
               financialEntries: mergedFinancialEntries,
               financialCustomFields: mergedCustomFields,
+              bankAccounts: mergedBankAccounts,
             };
 
             saveStoredData(merged);
@@ -308,6 +323,12 @@ export default function App() {
               ? [...remoteCustomFields, ...localOnlyFields]
               : prev.financialCustomFields;
 
+          const remoteBankAccounts = remote.bankAccounts || [];
+          const remoteBankIds = new Set(remoteBankAccounts.map((b) => b.id));
+          const localOnlyBanks = (prev.bankAccounts || []).filter((b) => !remoteBankIds.has(b.id));
+          const mergedBankAccounts =
+            remoteBankAccounts.length > 0 ? [...remoteBankAccounts, ...localOnlyBanks] : prev.bankAccounts;
+
           const remoteFinancialEntries = remote.financialEntries || [];
           const remoteFinIds = new Set(remoteFinancialEntries.map((e) => e.id));
           const localOnlyFinEntries = (prev.financialEntries || []).filter((e) => !remoteFinIds.has(e.id));
@@ -330,6 +351,7 @@ export default function App() {
             accountsPlan: mergedAccountsPlan,
             financialEntries: mergedFinancialEntries,
             financialCustomFields: mergedCustomFields,
+            bankAccounts: mergedBankAccounts,
           };
           saveStoredData(merged);
           return merged;
@@ -655,6 +677,7 @@ export default function App() {
   };
 
   const handleSaveAccountPlan = (account: AccountPlanItem) => {
+    const updatedEntriesToSync: FinancialEntry[] = [];
     updateData((prev) => {
       const idx = (prev.accountsPlan || []).findIndex((a) => a.id === account.id);
       let nextAccounts = [...(prev.accountsPlan || [])];
@@ -664,11 +687,14 @@ export default function App() {
         nextAccounts = [...nextAccounts, account];
       }
       // Atualiza o nome/grupo nos lançamentos já vinculados a esta conta
-      const nextEntries = (prev.financialEntries || []).map((e) =>
-        e.contaId === account.id
-          ? { ...e, contaNome: account.nome, grupo: account.grupo }
-          : e
-      );
+      const nextEntries = (prev.financialEntries || []).map((e) => {
+        if (e.contaId === account.id && (e.contaNome !== account.nome || e.grupo !== account.grupo)) {
+          const updated = { ...e, contaNome: account.nome, grupo: account.grupo };
+          updatedEntriesToSync.push(updated);
+          return updated;
+        }
+        return e;
+      });
       return {
         ...prev,
         accountsPlan: nextAccounts,
@@ -676,6 +702,33 @@ export default function App() {
       };
     });
     syncAccountPlanToSupabase(account);
+    updatedEntriesToSync.forEach((e) => syncFinancialEntryToSupabase(e));
+  };
+
+  const handleSaveAccountsBatch = (accounts: AccountPlanItem[]) => {
+    if (!accounts.length) return;
+    const updatedEntriesToSync: FinancialEntry[] = [];
+    updateData((prev) => {
+      const map = new Map<string, AccountPlanItem>((prev.accountsPlan || []).map((a) => [a.id, a]));
+      accounts.forEach((acc) => map.set(acc.id, acc));
+      const nextAccounts = Array.from(map.values());
+      const nextEntries = (prev.financialEntries || []).map((e) => {
+        const matched = map.get(e.contaId);
+        if (matched && (e.contaNome !== matched.nome || e.grupo !== matched.grupo)) {
+          const updated = { ...e, contaNome: matched.nome, grupo: matched.grupo };
+          updatedEntriesToSync.push(updated);
+          return updated;
+        }
+        return e;
+      });
+      return {
+        ...prev,
+        accountsPlan: nextAccounts,
+        financialEntries: nextEntries,
+      };
+    });
+    accounts.forEach((acc) => syncAccountPlanToSupabase(acc));
+    updatedEntriesToSync.forEach((e) => syncFinancialEntryToSupabase(e));
   };
 
   const handleDeleteAccountPlan = (id: string) => {
@@ -684,6 +737,16 @@ export default function App() {
       accountsPlan: (prev.accountsPlan || []).filter((a) => a.id !== id),
     }));
     deleteAccountPlanFromSupabase(id);
+  };
+
+  const handleDeleteAccountsBatch = (ids: string[]) => {
+    if (!ids.length) return;
+    const idSet = new Set(ids);
+    updateData((prev) => ({
+      ...prev,
+      accountsPlan: (prev.accountsPlan || []).filter((a) => !idSet.has(a.id)),
+    }));
+    ids.forEach((id) => deleteAccountPlanFromSupabase(id));
   };
 
   const handleRestoreDefaultAccounts = () => {
@@ -698,6 +761,53 @@ export default function App() {
       };
     });
     setSyncStatusMsg('Modelo padrão de Plano de Contas restaurado!');
+    setTimeout(() => setSyncStatusMsg(null), 3000);
+  };
+
+  const handleSaveBankAccount = (bank: BankAccount) => {
+    const updatedEntriesToSync: FinancialEntry[] = [];
+    updateData((prev) => {
+      const list = prev.bankAccounts || [];
+      const idx = list.findIndex((b) => b.id === bank.id);
+      const nextBanks = idx >= 0 ? list.map((b, i) => (i === idx ? bank : b)) : [...list, bank];
+      const nextEntries = (prev.financialEntries || []).map((e) => {
+        if (e.bancoId === bank.id && e.banco !== bank.nome) {
+          const updated = { ...e, banco: bank.nome };
+          updatedEntriesToSync.push(updated);
+          return updated;
+        }
+        return e;
+      });
+      return {
+        ...prev,
+        bankAccounts: nextBanks,
+        financialEntries: nextEntries,
+      };
+    });
+    syncBankAccountToSupabase(bank);
+    updatedEntriesToSync.forEach((e) => syncFinancialEntryToSupabase(e));
+  };
+
+  const handleDeleteBankAccount = (id: string) => {
+    updateData((prev) => ({
+      ...prev,
+      bankAccounts: (prev.bankAccounts || []).filter((b) => b.id !== id),
+    }));
+    deleteBankAccountFromSupabase(id);
+  };
+
+  const handleRestoreDefaultBankAccounts = () => {
+    updateData((prev) => {
+      const existingIds = new Set((prev.bankAccounts || []).map((b) => b.id));
+      const missingDefaults = defaultBankAccounts.filter((d) => !existingIds.has(d.id));
+      const merged = [...(prev.bankAccounts || []), ...missingDefaults];
+      missingDefaults.forEach((b) => syncBankAccountToSupabase(b));
+      return {
+        ...prev,
+        bankAccounts: merged,
+      };
+    });
+    setSyncStatusMsg('Contas bancárias padrão restauradas!');
     setTimeout(() => setSyncStatusMsg(null), 3000);
   };
 
@@ -923,6 +1033,7 @@ export default function App() {
             services={data.services}
             financialEntries={data.financialEntries}
             accountsPlan={data.accountsPlan}
+            bankAccounts={data.bankAccounts || defaultBankAccounts}
             onOpenLancamento={() => {
               setEditingLaunch(null);
               setIsLancamentoModalOpen(true);
@@ -999,16 +1110,22 @@ export default function App() {
             entries={data.financialEntries || []}
             accountsPlan={data.accountsPlan || defaultAccountsPlan}
             customFields={data.financialCustomFields || defaultFinancialCustomFields}
+            bankAccounts={data.bankAccounts || defaultBankAccounts}
             initialSubTab={financeiroInitialSubTab}
             onSaveEntry={handleSaveFinancialEntry}
             onSaveEntriesBatch={handleSaveFinancialEntriesBatch}
             onDeleteEntry={handleDeleteFinancialEntry}
             onDeleteEntriesBatch={handleDeleteFinancialEntriesBatch}
             onSaveAccount={handleSaveAccountPlan}
+            onSaveAccountsBatch={handleSaveAccountsBatch}
             onDeleteAccount={handleDeleteAccountPlan}
+            onDeleteAccountsBatch={handleDeleteAccountsBatch}
             onRestoreDefaultAccounts={handleRestoreDefaultAccounts}
             onSaveCustomField={handleSaveFinancialCustomField}
             onDeleteCustomField={handleDeleteFinancialCustomField}
+            onSaveBankAccount={handleSaveBankAccount}
+            onDeleteBankAccount={handleDeleteBankAccount}
+            onRestoreDefaultBankAccounts={handleRestoreDefaultBankAccounts}
           />
         )}
 

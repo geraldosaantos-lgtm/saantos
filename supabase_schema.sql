@@ -190,7 +190,24 @@ CREATE TABLE IF NOT EXISTS public.financial_custom_fields (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
 );
 
--- 8. MOVIMENTAÇÕES FINANCEIRAS E EXTRATO BANCÁRIO
+-- 8. CONTAS BANCÁRIAS E CAIXAS
+CREATE TABLE IF NOT EXISTS public.bank_accounts (
+  id TEXT PRIMARY KEY,
+  nome TEXT NOT NULL,
+  banco TEXT NOT NULL DEFAULT '',
+  agencia TEXT DEFAULT '',
+  numero_conta TEXT DEFAULT '',
+  tipo_conta TEXT NOT NULL DEFAULT 'Conta Corrente',
+  saldo_inicial NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  data_saldo_inicial TEXT DEFAULT '2026-01-01',
+  chave_pix TEXT DEFAULT '',
+  observacoes TEXT DEFAULT '',
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- 9. MOVIMENTAÇÕES FINANCEIRAS E EXTRATO BANCÁRIO
 CREATE TABLE IF NOT EXISTS public.financial_entries (
   id TEXT PRIMARY KEY,
   data TEXT NOT NULL,
@@ -201,6 +218,7 @@ CREATE TABLE IF NOT EXISTS public.financial_entries (
   grupo TEXT NOT NULL DEFAULT '',
   valor NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   banco TEXT DEFAULT 'CAIXA',
+  banco_id TEXT DEFAULT '',
   forma_pagamento TEXT DEFAULT '',
   documento TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'Conciliado',
@@ -212,8 +230,11 @@ CREATE TABLE IF NOT EXISTS public.financial_entries (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
 );
 
+ALTER TABLE public.financial_entries ADD COLUMN IF NOT EXISTS banco_id TEXT DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS idx_financial_entries_data ON public.financial_entries(data DESC);
 CREATE INDEX IF NOT EXISTS idx_financial_entries_tipo ON public.financial_entries(tipo);
+CREATE INDEX IF NOT EXISTS idx_financial_entries_banco_id ON public.financial_entries(banco_id);
 
 DROP TRIGGER IF EXISTS set_accounts_plan_updated_at ON public.accounts_plan;
 CREATE TRIGGER set_accounts_plan_updated_at BEFORE UPDATE ON public.accounts_plan FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
@@ -221,11 +242,15 @@ CREATE TRIGGER set_accounts_plan_updated_at BEFORE UPDATE ON public.accounts_pla
 DROP TRIGGER IF EXISTS set_financial_custom_fields_updated_at ON public.financial_custom_fields;
 CREATE TRIGGER set_financial_custom_fields_updated_at BEFORE UPDATE ON public.financial_custom_fields FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
+DROP TRIGGER IF EXISTS set_bank_accounts_updated_at ON public.bank_accounts;
+CREATE TRIGGER set_bank_accounts_updated_at BEFORE UPDATE ON public.bank_accounts FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
 DROP TRIGGER IF EXISTS set_financial_entries_updated_at ON public.financial_entries;
 CREATE TRIGGER set_financial_entries_updated_at BEFORE UPDATE ON public.financial_entries FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 ALTER TABLE public.accounts_plan ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.financial_custom_fields ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bank_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.financial_entries ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Permitir select anon accounts_plan" ON public.accounts_plan FOR SELECT USING (true);
@@ -233,6 +258,9 @@ CREATE POLICY "Permitir all anon accounts_plan" ON public.accounts_plan FOR ALL 
 
 CREATE POLICY "Permitir select anon financial_custom_fields" ON public.financial_custom_fields FOR SELECT USING (true);
 CREATE POLICY "Permitir all anon financial_custom_fields" ON public.financial_custom_fields FOR ALL USING (true) WITH CHECK (true);
+
+CREATE POLICY "Permitir select anon bank_accounts" ON public.bank_accounts FOR SELECT USING (true);
+CREATE POLICY "Permitir all anon bank_accounts" ON public.bank_accounts FOR ALL USING (true) WITH CHECK (true);
 
 CREATE POLICY "Permitir select anon financial_entries" ON public.financial_entries FOR SELECT USING (true);
 CREATE POLICY "Permitir all anon financial_entries" ON public.financial_entries FOR ALL USING (true) WITH CHECK (true);
