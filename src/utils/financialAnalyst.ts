@@ -1181,123 +1181,305 @@ export const exportFinancialAnalysisToExcel = (
   XLSX.writeFile(wb, `analise-financeira-especialista-${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
 
-export interface FinancialChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  createdAt: string;
-  isError?: boolean;
-}
-
-export const buildFinancialQuestionContext = (params: {
+export const answerFinancialQuestionLocally = (params: {
+  question: string;
   report: FinancialAnalysisReport;
   company: CompanyProfile;
   periodLabel: string;
   bankAccounts: BankAccount[];
   operationalRefRevenue: number;
-}) => {
-  const { report, company, periodLabel, bankAccounts, operationalRefRevenue } = params;
-  return {
-    empresa: company.nomeFantasia || company.razaoSocial || 'AutoLava',
-    periodoAnalisado: periodLabel,
-    faturamentoServicosPatioOS: Number(operationalRefRevenue.toFixed(2)),
-    saudeFinanceira: {
-      score: report.healthScore,
-      status: report.healthStatus,
-      resumoExecutivo: report.resumoExecutivo,
-    },
-    indicadores: {
-      receitaOperacionalBruta: Number(report.receitaBruta.toFixed(2)),
-      deducoesSobreReceita: Number(report.deducoesReceita.toFixed(2)),
-      receitaLiquida: Number(report.receitaLiquida.toFixed(2)),
-      receitasFinanceiras: Number(report.receitasFinanceiras.toFixed(2)),
-      totalReceitasGeral: Number(report.totalReceitasGeral.toFixed(2)),
-      custosVariaveis: Number(report.custosVariaveis.toFixed(2)),
-      indiceCustosVariaveisPct: Number(report.indiceCustosVariaveis.toFixed(2)),
-      custosFixos: Number(report.custosFixos.toFixed(2)),
-      indiceCustosFixosPct: Number(report.indiceCustosFixos.toFixed(2)),
-      margemContribuicaoValor: Number(report.margemContribuicaoValor.toFixed(2)),
-      margemContribuicaoPct: Number(report.margemContribuicaoPct.toFixed(2)),
-      pontoEquilibrioValor: Number(report.pontoEquilibrioValor.toFixed(2)),
-      pontoEquilibrioViavel: report.pontoEquilibrioViavel,
-      faltaParaEquilibrio: Number(report.faltaParaEquilibrio.toFixed(2)),
-      margemSegurancaValor: Number(report.margemSegurancaValor.toFixed(2)),
-      margemSegurancaPct: Number(report.margemSegurancaPct.toFixed(2)),
-      ebitdaValor: Number(report.ebitdaValor.toFixed(2)),
-      ebitdaPct: Number(report.ebitdaPct.toFixed(2)),
-      resultadoOperacionalValor: Number(report.resultadoOperacionalValor.toFixed(2)),
-      resultadoOperacionalPct: Number(report.resultadoOperacionalPct.toFixed(2)),
-      depreciacaoAmortizacao: Number(report.depreciacaoAmortizacao.toFixed(2)),
-      despesasFinanceiras: Number(report.despesasFinanceiras.toFixed(2)),
-      investimentosCapex: Number(report.investimentos.toFixed(2)),
-      totalDespesasGeral: Number(report.totalDespesasGeral.toFixed(2)),
-      pctDespesasSobreReceita: Number(report.pctDespesasSobreReceita.toFixed(2)),
-      saldoLiquidoFinal: Number(report.saldoLiquidoFinal.toFixed(2)),
-    },
-    fluxoCaixaProjetado: {
-      saldoAtualBancos: Number(report.fluxoCaixa.saldoAtualBancos.toFixed(2)),
-      receitasPendentesTotal: Number(report.fluxoCaixa.receitasPendentesTotal.toFixed(2)),
-      despesasPendentesTotal: Number(report.fluxoCaixa.despesasPendentesTotal.toFixed(2)),
-      saldoAposPendencias: Number(report.fluxoCaixa.saldoAposPendencias.toFixed(2)),
-      mediaDiariaReceita30d: Number(report.fluxoCaixa.mediaDiariaReceita30d.toFixed(2)),
-      mediaDiariaDespesa30d: Number(report.fluxoCaixa.mediaDiariaDespesa30d.toFixed(2)),
-      mediaDiariaLiquida30d: Number(report.fluxoCaixa.mediaDiariaLiquida30d.toFixed(2)),
-      projecao30Dias: Number(report.fluxoCaixa.projecao30Dias.toFixed(2)),
-      diasDeCaixa: report.fluxoCaixa.diasDeCaixa,
-    },
-    contasBancariasAtivas: bankAccounts
-      .filter((b) => b.ativo)
-      .map((b) => `${b.nome} (${b.banco} - ${b.tipoConta})`),
-    dreGerencial: report.dreLines.map((line) => ({
-      linha: line.label,
-      valor: Number(line.valor.toFixed(2)),
-      percentualAV: line.pctReceita !== null ? Number(line.pctReceita.toFixed(2)) : null,
-    })),
-    principaisContasMovimentadas: report.accountBreakdown.slice(0, 20).map((item) => ({
-      tipo: item.tipo,
-      natureza: COST_NATURE_LABELS[item.nature],
-      conta: item.nome,
-      grupo: item.grupo,
-      total: Number(item.total.toFixed(2)),
-      qtdLancamentos: item.count,
-      pctSobreReceita: Number(item.pctSobreReceita.toFixed(2)),
-    })),
-    pontosObservadosEDicas: report.insights.map((ins) => ({
-      nivel: ins.nivel,
-      categoria: ins.categoria,
-      titulo: ins.titulo,
-      observacao: ins.observacao,
-      acaoRecomendada: ins.acaoRecomendada,
-    })),
-  };
-};
+}): string => {
+  const { question, report, company, periodLabel, bankAccounts, operationalRefRevenue } = params;
+  const qNorm = normalizeText(question);
+  const empresaNome = company.nomeFantasia || company.razaoSocial || 'AutoLava';
+  const hasData = report.totalReceitasGeral > 0 || report.totalDespesasGeral > 0;
 
-export const askFinancialAssistantAPI = async (params: {
-  question: string;
-  history: Array<{ role: 'user' | 'assistant'; text: string }>;
-  context: Record<string, unknown>;
-}): Promise<string> => {
-  const response = await fetch('/api/financial-assistant/ask', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
+  // Extrai possível valor percentual (ex.: 15%) ou monetário (ex.: R$ 5.000,00 / 5000)
+  const pctMatch = question.match(/(\d+(?:[.,]\d+)?)\s*%/);
+  const pctValue = pctMatch ? Number(pctMatch[1].replace(',', '.')) : null;
 
-  const data = (await response.json().catch(() => ({}))) as {
-    answer?: string;
-    error?: string;
-  };
+  const cleanedForMoney = question.replace(/(\d+(?:[.,]\d+)?)\s*%/g, ' ');
+  const moneyMatch = cleanedForMoney.match(/(?:R\$\s*)?(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?/);
+  let moneyValue: number | null = null;
+  if (moneyMatch) {
+    const intPart = moneyMatch[1].replace(/\./g, '');
+    const decPart = moneyMatch[2] ? `.${moneyMatch[2]}` : '';
+    const parsed = Number(`${intPart}${decPart}`);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      moneyValue = parsed;
+    }
+  }
 
-  if (!response.ok) {
-    throw new Error(
-      data.error || `Erro ao consultar o assistente financeiro (código ${response.status}).`
+  const containsAny = (terms: string[]) => terms.some((t) => qNorm.includes(t));
+
+  // Busca se o usuário citou alguma conta específica do Plano de Contas
+  const stopWords = new Set([
+    'COMO', 'QUAL', 'QUAIS', 'QUANTO', 'QUANTOS', 'POR', 'QUE', 'PARA', 'COM', 'SEM', 'DAS', 'DOS',
+    'NOS', 'NAS', 'MEU', 'MINHA', 'MEUS', 'MINHAS', 'ESSE', 'ESTE', 'ESTA', 'PERIODO', 'MES', 'ANO',
+    'SOBRE', 'VALOR', 'TOTAL', 'GASTEI', 'GASTO', 'DESPESA', 'RECEITA', 'CONTA', 'CONTAS', 'ESTA',
+    'ESTAO', 'MAIS', 'MENOS', 'POSSO', 'PRECISO', 'FAZER', 'MELHORAR', 'CORRIGIR', 'AUMENTAR', 'REDUZIR',
+  ]);
+  const queryWords = qNorm
+    .split(/[^A-Z0-9]+/)
+    .filter((w) => w.length >= 3 && !stopWords.has(w));
+
+  const matchedAccounts =
+    queryWords.length > 0
+      ? report.accountBreakdown.filter((acc) => {
+          const accText = normalizeText(`${acc.nome} ${acc.grupo}`);
+          return queryWords.some((w) => accText.includes(w));
+        })
+      : [];
+
+  const sections: string[] = [];
+
+  // 1. Saudações ou pedido de ajuda
+  if (
+    containsAny(['OI', 'OLA', 'BOM DIA', 'BOA TARDE', 'BOA NOITE', 'AJUDA', 'O QUE POSSO PERGUNTAR', 'COMANDOS']) &&
+    queryWords.length <= 2
+  ) {
+    sections.push(
+      `Olá! Sou o Assistente Financeiro Especialista da ${empresaNome}. Estou analisando seus números reais de ${periodLabel} (Saúde Financeira: ${report.healthScore}/100 · ${report.healthStatus}).\n\nVocê pode me perguntar coisas como:\n- "Como melhorar meu EBITDA e Margem de Contribuição?"\n- "Quanto falta ou qual minha folga no Ponto de Equilíbrio?"\n- "Quais despesas pesam mais e onde cortar primeiro?"\n- "Meu Fluxo de Caixa aguenta os próximos 30 dias?"\n- "Quanto preciso faturar para lucrar R$ 5.000?"\n- "Posso investir R$ 3.000 agora?" ou "E se eu reduzir despesas em 10%?"`
+    );
+    return sections.join('\n\n');
+  }
+
+  // 2. Simulações matemáticas ("E se...", "Quanto preciso faturar para lucrar X?", "Posso gastar X?", "Cortar X%")
+  const isTargetProfitSim =
+    containsAny(['LUCRAR', 'META DE LUCRO', 'GANHAR', 'SOBRAR']) &&
+    containsAny(['QUANTO', 'FATURAR', 'VENDER', 'PRECISO', 'META']) &&
+    moneyValue !== null;
+
+  if (isTargetProfitSim && moneyValue !== null) {
+    if (report.margemContribuicaoPct <= 0) {
+      sections.push(
+        `📐 SIMULAÇÃO — META DE LUCRO DE ${formatCurrency(moneyValue)}:\nNão é possível calcular o faturamento para essa meta porque sua Margem de Contribuição atual está em ${report.margemContribuicaoPct.toFixed(1)}% (<= 0%). Primeiro ajuste os custos variáveis ou preços para tornar a margem positiva.`
+      );
+    } else {
+      const targetRev = (report.custosFixos + moneyValue) / (report.margemContribuicaoPct / 100);
+      const extraRev = Math.max(0, targetRev - report.receitaLiquida);
+      sections.push(
+        `📐 SIMULAÇÃO — META DE LUCRO OPERACIONAL (EBITDA) DE ${formatCurrency(moneyValue)}:\n• Custos Fixos atuais: ${formatCurrency(report.custosFixos)}\n• Margem de Contribuição atual: ${report.margemContribuicaoPct.toFixed(1)}%\n• Receita Líquida necessária: ${formatCurrency(targetRev)}\n• Diferença frente ao faturamento líquido atual (${formatCurrency(report.receitaLiquida)}): ${
+          extraRev > 0
+            ? `faltam ${formatCurrency(extraRev)} de faturamento líquido.`
+            : `você já superou essa meta em ${formatCurrency(report.receitaLiquida - targetRev)}!`
+        }`
+      );
+    }
+  }
+
+  const isSpendingSim =
+    containsAny(['POSSO GASTAR', 'POSSO COMPRAR', 'POSSO INVESTIR', 'POSSO RETIRAR', 'COMPRAR EQUIPAMENTO', 'IMPACTO DE']) &&
+    moneyValue !== null;
+
+  if (isSpendingSim && moneyValue !== null) {
+    const saldoPosGasto = report.fluxoCaixa.saldoAtualBancos - moneyValue;
+    const projPosGasto = report.fluxoCaixa.projecao30Dias - moneyValue;
+    const diasConsumidos =
+      report.fluxoCaixa.mediaDiariaDespesa30d > 0
+        ? Math.round(moneyValue / report.fluxoCaixa.mediaDiariaDespesa30d)
+        : null;
+    const viavel = saldoPosGasto >= 0 && projPosGasto >= 0;
+    sections.push(
+      `💳 SIMULAÇÃO DE DESEMBOLSO / INVESTIMENTO DE ${formatCurrency(moneyValue)}:\n• Saldo real atual em bancos: ${formatCurrency(report.fluxoCaixa.saldoAtualBancos)} → após esse gasto iria para ${formatCurrency(saldoPosGasto)}.\n• Projeção de caixa em 30 dias cairia de ${formatCurrency(report.fluxoCaixa.projecao30Dias)} para ${formatCurrency(projPosGasto)}.${
+        diasConsumidos !== null ? `\n• Esse valor equivale a cerca de ${diasConsumidos} dia(s) de despesas médias da operação.` : ''
+      }\n• Parecer: ${
+        viavel
+          ? 'Viável no caixa atual, desde que não comprometa sua reserva de emergência e os pagamentos pendentes.'
+          : 'Risco de aperto ou caixa negativo! Prefira parcelar sem juros ou aguardar a entrada dos recebíveis pendentes.'
+      }`
     );
   }
 
-  if (!data.answer || typeof data.answer !== 'string') {
-    throw new Error('Resposta vazia recebida do assistente financeiro.');
+  const isCutSim = containsAny(['CORTAR', 'REDUZIR', 'ECONOMIZAR', 'DIMINUIR']) && (pctValue !== null || moneyValue !== null);
+  if (isCutSim && !isTargetProfitSim) {
+    const economia =
+      pctValue !== null
+        ? (report.totalDespesasGeral * pctValue) / 100
+        : moneyValue || 0;
+    const novoEbitda = report.ebitdaValor + economia;
+    const novosFixos = Math.max(0, report.custosFixos - economia);
+    const novoPe =
+      report.margemContribuicaoPct > 0
+        ? novosFixos / (report.margemContribuicaoPct / 100)
+        : 0;
+    if (economia > 0) {
+      sections.push(
+        `✂️ SIMULAÇÃO DE CORTE DE CUSTOS (${pctValue !== null ? `${pctValue}%` : formatCurrency(economia)}):\n• Economia estimada no período: ${formatCurrency(economia)}\n• EBITDA subiria de ${formatCurrency(report.ebitdaValor)} para ${formatCurrency(novoEbitda)}\n${
+          report.pontoEquilibrioViavel
+            ? `• Se aplicado nos custos fixos, o Ponto de Equilíbrio cairia de ${formatCurrency(report.pontoEquilibrioValor)} para ${formatCurrency(novoPe)}.`
+            : ''
+        }`
+      );
+    }
   }
 
-  return data.answer;
+  const isRevenueSim =
+    containsAny(['AUMENTAR', 'CRESCER', 'SUBIR']) &&
+    containsAny(['RECEITA', 'FATURAMENTO', 'VENDAS']) &&
+    pctValue !== null;
+  if (isRevenueSim && pctValue !== null) {
+    const novaRec = report.receitaLiquida * (1 + pctValue / 100);
+    const novaMc = novaRec * (report.margemContribuicaoPct / 100);
+    const novoEbitda = novaMc - report.custosFixos;
+    sections.push(
+      `📈 SIMULAÇÃO DE CRESCIMENTO DE +${pctValue}% NA RECEITA:\n• Receita Líquida passaria de ${formatCurrency(report.receitaLiquida)} para ${formatCurrency(novaRec)}\n• Margem de Contribuição iria para ${formatCurrency(novaMc)}\n• EBITDA passaria de ${formatCurrency(report.ebitdaValor)} para ${formatCurrency(novoEbitda)}.`
+    );
+  }
+
+  // 3. Ponto de Equilíbrio
+  if (containsAny(['EQUILIBRIO', 'BREAK', 'EMPATAR', 'ZERO A ZERO', 'PAGAR AS CONTAS', 'FOLGA'])) {
+    if (!hasData) {
+      sections.push(
+        `🎯 PONTO DE EQUILÍBRIO:\nAinda não há receitas e despesas suficientes em ${periodLabel}. Lance seus custos fixos, custos variáveis e receitas no Financeiro para calcular exatamente quanto precisa faturar para cobrir a operação.`
+      );
+    } else if (!report.pontoEquilibrioViavel) {
+      sections.push(
+        `🎯 PONTO DE EQUILÍBRIO:\nNo momento está inviável porque sua Margem de Contribuição está em ${report.margemContribuicaoPct.toFixed(1)}% (custos variáveis de ${formatCurrency(report.custosVariaveis)} superam ou igualam a Receita Líquida de ${formatCurrency(report.receitaLiquida)}).\n• Ação imediata: revise a classificação das contas (aba "Ajustar Fixo / Variável") e reduza custos diretos ou reajuste preços.`
+      );
+    } else if (report.faltaParaEquilibrio > 0) {
+      const topFixa = report.accountBreakdown.find((i) => i.tipo === 'despesa' && i.nature === 'fixo');
+      sections.push(
+        `🎯 PONTO DE EQUILÍBRIO (${periodLabel}):\n• Ponto de Equilíbrio necessário: ${formatCurrency(report.pontoEquilibrioValor)}\n• Receita Líquida realizada: ${formatCurrency(report.receitaLiquida)}\n• Faltam ${formatCurrency(report.faltaParaEquilibrio)} de faturamento líquido para cobrir os ${formatCurrency(report.custosFixos)} de custos fixos (MC atual de ${report.margemContribuicaoPct.toFixed(1)}%).\n• Como resolver mais rápido: fature +${formatCurrency(report.faltaParaEquilibrio)} (ex.: foco em pacotes de maior ticket e cobrança de frotas) ou reduza custos fixos${topFixa ? `, começando por "${topFixa.nome}" (${formatCurrency(topFixa.total)})` : ''}.`
+      );
+    } else {
+      sections.push(
+        `🎯 PONTO DE EQUILÍBRIO (${periodLabel}):\n• Situação: SUPERADO!\n• Seu Ponto de Equilíbrio é ${formatCurrency(report.pontoEquilibrioValor)} e você já faturou ${formatCurrency(report.receitaLiquida)} líquidos.\n• Margem de segurança (folga): +${formatCurrency(report.margemSegurancaValor)} (+${report.margemSegurancaPct.toFixed(1)}% acima do mínimo necessário).`
+      );
+    }
+  }
+
+  // 4. EBITDA & Margem de Contribuição & Resultado Operacional
+  if (containsAny(['EBITDA', 'LAJIDA', 'MARGEM', 'CONTRIBUICAO', 'RESULTADO OPERACIONAL', 'EBIT'])) {
+    const topVar = report.accountBreakdown.find((i) => i.tipo === 'despesa' && i.nature === 'variavel');
+    const topFix = report.accountBreakdown.find((i) => i.tipo === 'despesa' && i.nature === 'fixo');
+    sections.push(
+      `📊 MARGEM DE CONTRIBUIÇÃO, EBITDA E RESULTADO OPERACIONAL (${periodLabel}):\n• Receita Líquida: ${formatCurrency(report.receitaLiquida)} (Bruta ${formatCurrency(report.receitaBruta)} − Deduções ${formatCurrency(report.deducoesReceita)})\n• Margem de Contribuição: ${formatCurrency(report.margemContribuicaoValor)} (${report.margemContribuicaoPct.toFixed(1)}%) após ${formatCurrency(report.custosVariaveis)} de custos variáveis\n• EBITDA (LAJIDA): ${formatCurrency(report.ebitdaValor)} (${report.ebitdaPct.toFixed(1)}%) após ${formatCurrency(report.custosFixos)} de custos fixos\n• Resultado Operacional (EBIT): ${formatCurrency(report.resultadoOperacionalValor)} (${report.resultadoOperacionalPct.toFixed(1)}%)\n• Dica prática para elevar EBITDA e Margem: ${
+        report.margemContribuicaoPct < 50
+          ? `atue no Índice de Custos Variáveis (${report.indiceCustosVariaveis.toFixed(1)}%)${topVar ? `, especialmente em "${topVar.nome}" (${formatCurrency(topVar.total)})` : ''}, controlando diluição de insumos e vendendo serviços completos.`
+          : report.indiceCustosFixos > 40
+          ? `sua margem unitária é boa (${report.margemContribuicaoPct.toFixed(1)}%), mas os Custos Fixos pesam ${report.indiceCustosFixos.toFixed(1)}%${topFix ? ` — renegocie "${topFix.nome}" (${formatCurrency(topFix.total)})` : ''} e amplie volume para diluir o custo fixo.`
+          : 'sua eficiência operacional está equilibrada; evite antecipações com juros/tarifas (despesas financeiras atuais: ' + formatCurrency(report.despesasFinanceiras) + ') para que o EBITDA vire lucro líquido.'
+      }`
+    );
+  }
+
+  // 5. Despesas, Onde Cortar, Custos Fixos e Variáveis
+  if (
+    containsAny([
+      'DESPESA', 'GASTO', 'CUSTO', 'CUSTOS', 'FIXO', 'FIXOS', 'VARIAVEL', 'VARIAVEIS',
+      'ICF', 'ICV', 'PESAM', 'PESA', 'MAIORES', 'ONDE CORTAR', 'COMPROMETIMENTO',
+    ]) &&
+    !isCutSim
+  ) {
+    const topExpenses = report.accountBreakdown.filter((i) => i.tipo === 'despesa').slice(0, 5);
+    const rankingStr =
+      topExpenses.length > 0
+        ? topExpenses
+            .map(
+              (item, idx) =>
+                `${idx + 1}. ${item.nome} (${COST_NATURE_LABELS[item.nature]}): ${formatCurrency(item.total)} (${item.pctSobreReceita.toFixed(1)}% da receita)`
+            )
+            .join('\n')
+        : 'Nenhuma despesa registrada no período.';
+    sections.push(
+      `💸 ANÁLISE DE DESPESAS E CUSTOS (${periodLabel}):\n• % das Despesas sobre Receita: ${report.pctDespesasSobreReceita.toFixed(1)}% (${formatCurrency(report.totalDespesasGeral)} de saídas totais)\n• Índice de Custos Fixos (ICF): ${report.indiceCustosFixos.toFixed(1)}% (${formatCurrency(report.custosFixos)})\n• Índice de Custos Variáveis (ICV): ${report.indiceCustosVariaveis.toFixed(1)}% (${formatCurrency(report.custosVariaveis)})\n\nPrincipais contas de saída para priorizar negociação/controle:\n${rankingStr}`
+    );
+  }
+
+  // 6. Fluxo de Caixa Projetado, Bancos e Pendências
+  if (containsAny(['FLUXO', 'CAIXA', 'PROJECAO', 'PROJETADO', '30 DIAS', 'AGUENTA', 'FOLEGO', 'BANCO', 'SALDO', 'PENDENTE', 'PAGAR', 'RECEBER'])) {
+    const activeBanks = bankAccounts.filter((b) => b.ativo).map((b) => b.nome).join(', ') || 'Caixa padrão';
+    sections.push(
+      `🏦 FLUXO DE CAIXA PROJETADO (30 DIAS):\n• Saldo real atual em bancos (${activeBanks}): ${formatCurrency(report.fluxoCaixa.saldoAtualBancos)}\n• Títulos pendentes: +${formatCurrency(report.fluxoCaixa.receitasPendentesTotal)} a receber / -${formatCurrency(report.fluxoCaixa.despesasPendentesTotal)} a pagar → Saldo pós-pendências: ${formatCurrency(report.fluxoCaixa.saldoAposPendencias)}\n• Ritmo médio diário (últimos 30d): +${formatCurrency(report.fluxoCaixa.mediaDiariaReceita30d)} entradas / -${formatCurrency(report.fluxoCaixa.mediaDiariaDespesa30d)} saídas (saldo ${formatCurrency(report.fluxoCaixa.mediaDiariaLiquida30d)}/dia)\n• Projeção final em 30 dias: ${formatCurrency(report.fluxoCaixa.projecao30Dias)}${
+        report.fluxoCaixa.diasDeCaixa !== null
+          ? ` (autonomia estimada de ${report.fluxoCaixa.diasDeCaixa} dia(s) de caixa)`
+          : ''
+      }.\n• Recomendação: ${
+        report.fluxoCaixa.projecao30Dias < 0 || report.fluxoCaixa.saldoAposPendencias < 0
+          ? 'Atenção imediata: renegocie vencimentos das contas a pagar e acelere a cobrança dos recebíveis pendentes antes de assumir novos gastos.'
+          : report.fluxoCaixa.diasDeCaixa !== null && report.fluxoCaixa.diasDeCaixa < 15
+          ? 'Reserva enxuta (abaixo de 15 dias). Evite compras à vista não essenciais até reforçar o colchão de liquidez.'
+          : 'Fluxo projetado positivo e saudável para os próximos 30 dias.'
+      }`
+    );
+  }
+
+  // 7. Receita Líquida / Bruta / Deduções & Confronto com Pátio OS
+  if (containsAny(['RECEITA', 'FATURAMENTO', 'DEDUCAO', 'DEDUCOES', 'IMPOSTO', 'PATIO', 'OS', 'ORDEM', 'DIFERENCA', 'CONCILIACAO', 'EXTRATO'])) {
+    const gap = operationalRefRevenue - report.totalReceitasGeral;
+    sections.push(
+      `💰 RECEITAS & CONCILIAÇÃO COM O PÁTIO (${periodLabel}):\n• Receita Operacional Bruta: ${formatCurrency(report.receitaBruta)}\n• (-) Deduções e Impostos s/ Receita: ${formatCurrency(report.deducoesReceita)}\n• (=) Receita Líquida: ${formatCurrency(report.receitaLiquida)}\n• OS lançadas no Pátio (referência operacional): ${formatCurrency(operationalRefRevenue)}${
+        operationalRefRevenue > 0
+          ? gap > 0
+            ? `\n• Diferença a conciliar/receber: ${formatCurrency(gap)} em serviços do pátio ainda não entraram como receita financeira no período (verifique faturas de frotas em aberto ou importe o extrato bancário atualizado).`
+            : '\n• As receitas financeiras estão alinhadas ou superiores ao movimento registrado no pátio.'
+          : ''
+      }`
+    );
+  }
+
+  // 8. Transferências entre contas
+  if (containsAny(['TRANSFERENCIA', 'TRANSFERIR', 'ENTRE BANCOS', 'ENTRE CONTAS'])) {
+    sections.push(
+      `🔁 TRANSFERÊNCIAS ENTRE CONTAS:\nLançamentos do tipo Transferência são isolados automaticamente das Receitas, Despesas, Margem de Contribuição, EBITDA, Ponto de Equilíbrio e DRE. Eles atualizam exclusivamente os saldos das duas contas bancárias (origem e destino), que compõem seu Saldo Real Atual (${formatCurrency(report.fluxoCaixa.saldoAtualBancos)}).`
+    );
+  }
+
+  // 9. DRE Gerencial
+  if (containsAny(['DRE', 'DEMONSTRACAO', 'RESULTADO LIQUIDO'])) {
+    const dreText = report.dreLines
+      .map(
+        (l) =>
+          `• ${l.label}: ${formatCurrency(l.valor)}${l.pctReceita !== null ? ` (${l.pctReceita.toFixed(1)}%)` : ''}`
+      )
+      .join('\n');
+    sections.push(`📄 DRE GERENCIAL (${periodLabel}):\n${dreText}`);
+  }
+
+  // 10. Pontos Críticos, Alertas e Dicas
+  if (containsAny(['CRITICO', 'CRITICOS', 'ALERTA', 'DICA', 'DICAS', 'MELHORAR', 'CORRIGIR', 'PROBLEMA', 'OBSERVAR', 'OBSERVADO'])) {
+    const topInsights = report.insights
+      .slice(0, 4)
+      .map(
+        (ins, idx) =>
+          `${idx + 1}. [${ins.nivel.toUpperCase()}] ${ins.titulo}\n   Observação: ${ins.observacao}\n   Dica: ${ins.acaoRecomendada}`
+      )
+      .join('\n\n');
+    sections.push(`⚠️ PRINCIPAIS PONTOS OBSERVADOS & DICAS (${periodLabel}):\n${topInsights}`);
+  }
+
+  // 11. Consulta direta a contas específicas citadas na pergunta
+  if (matchedAccounts.length > 0 && sections.length === 0) {
+    const listText = matchedAccounts
+      .slice(0, 6)
+      .map(
+        (acc) =>
+          `• ${acc.nome} (${acc.tipo === 'receita' ? 'Receita' : 'Despesa'} · ${COST_NATURE_LABELS[acc.nature]}): ${formatCurrency(acc.total)} (${acc.count} lançamento(s) · ${acc.pctSobreReceita.toFixed(1)}% da receita)`
+      )
+      .join('\n');
+    sections.push(`🔎 CONTAS ENCONTRADAS PARA SUA PERGUNTA (${periodLabel}):\n${listText}`);
+  } else if (matchedAccounts.length > 0 && sections.length > 0) {
+    const listText = matchedAccounts
+      .slice(0, 4)
+      .map((acc) => `• ${acc.nome}: ${formatCurrency(acc.total)} (${COST_NATURE_LABELS[acc.nature]})`)
+      .join('\n');
+    sections.push(`🔎 Detalhe das contas relacionadas:\n${listText}`);
+  }
+
+  // 12. Fallback inteligente: entrega resumo executivo completo + recomendações prioritárias
+  if (sections.length === 0) {
+    const topAlert = report.insights[0];
+    sections.push(
+      `📋 PARECER DO ESPECIALISTA PARA "${periodLabel}":\n${report.resumoExecutivo}\n\n• Saúde Financeira: ${report.healthScore}/100 (${report.healthStatus})\n• Receita Líquida: ${formatCurrency(report.receitaLiquida)} | Margem de Contribuição: ${report.margemContribuicaoPct.toFixed(1)}%\n• Ponto de Equilíbrio: ${report.pontoEquilibrioViavel ? formatCurrency(report.pontoEquilibrioValor) : 'Inviável'} | EBITDA: ${formatCurrency(report.ebitdaValor)} (${report.ebitdaPct.toFixed(1)}%)\n• % Despesas s/ Receita: ${report.pctDespesasSobreReceita.toFixed(1)}% | Fluxo Projetado 30d: ${formatCurrency(report.fluxoCaixa.projecao30Dias)}${
+        topAlert
+          ? `\n\n💡 Principal ponto de atenção:\n${topAlert.titulo} — ${topAlert.acaoRecomendada}`
+          : ''
+      }`
+    );
+  }
+
+  return sections.join('\n\n');
 };
+
 

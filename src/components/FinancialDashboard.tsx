@@ -39,7 +39,6 @@ import {
   Sliders,
   MessageSquare,
   Send,
-  Loader2,
   Trash2,
 } from 'lucide-react';
 import {
@@ -49,14 +48,20 @@ import {
   inferAccountCostNature,
   exportFinancialAnalysisToPDF,
   exportFinancialAnalysisToExcel,
-  buildFinancialQuestionContext,
-  askFinancialAssistantAPI,
-  FinancialChatMessage,
+  answerFinancialQuestionLocally,
   CostNature,
   COST_NATURE_LABELS,
   EXPENSE_COST_NATURES,
   REVENUE_COST_NATURES,
 } from '../utils/financialAnalyst';
+
+interface FinancialChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+  isError?: boolean;
+}
 
 interface FinancialDashboardProps {
   company: CompanyProfile;
@@ -88,7 +93,6 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
   const [showClassificationEditor, setShowClassificationEditor] = useState(false);
   const [questionInput, setQuestionInput] = useState('');
   const [chatMessages, setChatMessages] = useState<FinancialChatMessage[]>([]);
-  const [isAskingAssistant, setIsAskingAssistant] = useState(false);
 
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -416,70 +420,39 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
     'Quanto falta ou qual minha folga no Ponto de Equilíbrio?',
     'Quais despesas mais pesam e onde devo cortar primeiro?',
     'Meu Fluxo de Caixa aguenta os próximos 30 dias?',
+    'Quanto preciso faturar para lucrar R$ 5.000?',
   ];
 
-  const handleAskQuestion = async (rawQuestion?: string) => {
+  const handleAskQuestion = (rawQuestion?: string) => {
     const q = (rawQuestion ?? questionInput).trim();
-    if (!q || isAskingAssistant) return;
+    if (!q) return;
 
+    const nowTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const userMsg: FinancialChatMessage = {
-      id: `q-${Date.now()}`,
+      id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       role: 'user',
       text: q,
-      createdAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      createdAt: nowTime,
     };
 
-    const historyForApi = chatMessages
-      .filter((m) => !m.isError)
-      .slice(-8)
-      .map((m) => ({ role: m.role, text: m.text }));
+    const answer = answerFinancialQuestionLocally({
+      question: q,
+      report: analysisReport,
+      company,
+      periodLabel,
+      bankAccounts,
+      operationalRefRevenue,
+    });
 
-    setChatMessages((prev) => [...prev, userMsg]);
+    const assistantMsg: FinancialChatMessage = {
+      id: `a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      role: 'assistant',
+      text: answer,
+      createdAt: nowTime,
+    };
+
+    setChatMessages((prev) => [...prev, userMsg, assistantMsg]);
     if (!rawQuestion) setQuestionInput('');
-    setIsAskingAssistant(true);
-
-    try {
-      const context = buildFinancialQuestionContext({
-        report: analysisReport,
-        company,
-        periodLabel,
-        bankAccounts,
-        operationalRefRevenue,
-      });
-
-      const answer = await askFinancialAssistantAPI({
-        question: q,
-        history: historyForApi,
-        context,
-      });
-
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          text: answer,
-          createdAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Não foi possível obter resposta do assistente financeiro.';
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          text: msg,
-          createdAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-          isError: true,
-        },
-      ]);
-    } finally {
-      setIsAskingAssistant(false);
-    }
   };
 
   const classificationItems = useMemo(() => {
@@ -1287,8 +1260,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setChatMessages([])}
-                  disabled={isAskingAssistant}
-                  className="px-2.5 py-1.5 text-[11px] font-semibold text-neutral-600 hover:text-rose-700 bg-neutral-100 hover:bg-rose-50 rounded-lg transition-colors flex items-center gap-1 self-start sm:self-auto disabled:opacity-50"
+                  className="px-2.5 py-1.5 text-[11px] font-semibold text-neutral-600 hover:text-rose-700 bg-neutral-100 hover:bg-rose-50 rounded-lg transition-colors flex items-center gap-1 self-start sm:self-auto"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Limpar conversa
@@ -1302,9 +1274,8 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                 <button
                   key={suggestion}
                   type="button"
-                  disabled={isAskingAssistant}
                   onClick={() => handleAskQuestion(suggestion)}
-                  className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-200/80 rounded-xl transition-colors text-left disabled:opacity-50"
+                  className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-200/80 rounded-xl transition-colors text-left"
                 >
                   {suggestion}
                 </button>
@@ -1323,32 +1294,18 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                       className={`max-w-[92%] sm:max-w-[82%] rounded-2xl px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed whitespace-pre-wrap ${
                         msg.role === 'user'
                           ? 'bg-neutral-900 text-white rounded-br-xs'
-                          : msg.isError
-                          ? 'bg-rose-50 border border-rose-200 text-rose-800 rounded-bl-xs'
                           : 'bg-white border border-neutral-200 text-neutral-800 shadow-2xs rounded-bl-xs'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-3 mb-1">
                         <span
                           className={`text-[10px] font-extrabold uppercase tracking-wider ${
-                            msg.role === 'user'
-                              ? 'text-emerald-300'
-                              : msg.isError
-                              ? 'text-rose-700'
-                              : 'text-emerald-700'
+                            msg.role === 'user' ? 'text-emerald-300' : 'text-emerald-700'
                           }`}
                         >
-                          {msg.role === 'user'
-                            ? 'Você'
-                            : msg.isError
-                            ? 'Aviso do Sistema'
-                            : 'Especialista Financeiro'}
+                          {msg.role === 'user' ? 'Você' : 'Especialista Financeiro'}
                         </span>
-                        <span
-                          className={`text-[10px] font-mono ${
-                            msg.role === 'user' ? 'text-neutral-400' : 'text-neutral-400'
-                          }`}
-                        >
+                        <span className="text-[10px] font-mono text-neutral-400">
                           {msg.createdAt}
                         </span>
                       </div>
@@ -1356,15 +1313,6 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                     </div>
                   </div>
                 ))}
-
-                {isAskingAssistant && (
-                  <div className="flex items-start">
-                    <div className="bg-white border border-neutral-200 rounded-2xl rounded-bl-xs px-3.5 py-2.5 text-xs text-neutral-600 flex items-center gap-2 shadow-2xs">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-700" />
-                      Analisando indicadores, DRE e fluxo de caixa...
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
@@ -1380,27 +1328,17 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                 type="text"
                 value={questionInput}
                 onChange={(e) => setQuestionInput(e.target.value)}
-                disabled={isAskingAssistant}
                 maxLength={2000}
-                placeholder="Ex.: O que fazer para atingir o Ponto de Equilíbrio mais rápido este mês?"
-                className="flex-1 px-3.5 py-2.5 text-xs sm:text-sm bg-neutral-50 border border-neutral-300 focus:border-emerald-600 focus:bg-white rounded-xl outline-none transition-colors disabled:opacity-60"
+                placeholder="Ex.: Quanto preciso faturar para lucrar R$ 5.000? Ou onde cortar custos?"
+                className="flex-1 px-3.5 py-2.5 text-xs sm:text-sm bg-neutral-50 border border-neutral-300 focus:border-emerald-600 focus:bg-white rounded-xl outline-none transition-colors"
               />
               <button
                 type="submit"
-                disabled={isAskingAssistant || !questionInput.trim()}
+                disabled={!questionInput.trim()}
                 className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:bg-neutral-300 text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shrink-0 shadow-xs"
               >
-                {isAskingAssistant ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Respondendo...
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5" />
-                    Perguntar
-                  </>
-                )}
+                <Send className="w-3.5 h-3.5" />
+                Perguntar
               </button>
             </form>
           </div>
