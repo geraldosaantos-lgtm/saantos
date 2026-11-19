@@ -55,7 +55,7 @@ interface FinanceiroViewProps {
   accountsPlan: AccountPlanItem[];
   customFields: FinancialCustomField[];
   bankAccounts: BankAccount[];
-  initialSubTab?: 'movimentacoes' | 'extrato' | 'bancos' | 'plano';
+  initialSubTab?: 'lancar' | 'movimentacoes' | 'extrato' | 'bancos' | 'plano';
   onSaveEntry: (entry: FinancialEntry) => void;
   onSaveEntriesBatch: (entries: FinancialEntry[]) => void;
   onDeleteEntry: (id: string) => void;
@@ -72,7 +72,7 @@ interface FinanceiroViewProps {
   onRestoreDefaultBankAccounts?: () => void;
 }
 
-type SubTab = 'movimentacoes' | 'extrato' | 'bancos' | 'plano';
+type SubTab = 'lancar' | 'movimentacoes' | 'extrato' | 'bancos' | 'plano';
 type FilterPeriod = 'mes' | 'mes_anterior' | 'hoje' | 'semana' | 'todos' | 'personalizado';
 
 const PAYMENT_METHODS = [
@@ -208,6 +208,33 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     camposExtras: {},
   });
   const [entryToDelete, setEntryToDelete] = useState<FinancialEntry | null>(null);
+
+  // Formulário Direto da Aba "Lançar (Despesa / Receita / Transferência)"
+  const [quickLaunchError, setQuickLaunchError] = useState<string | null>(null);
+  const [quickLaunchForm, setQuickLaunchForm] = useState<Omit<FinancialEntry, 'id'>>(() => {
+    const firstExpense =
+      accountsPlan.find((a) => a.ativo && a.tipo === 'despesa') ||
+      accountsPlan.find((a) => a.tipo === 'despesa');
+    return {
+      data: new Date().toISOString().slice(0, 10),
+      descricao: '',
+      tipo: 'despesa',
+      contaId: firstExpense?.id || '',
+      contaNome: firstExpense?.nome || '',
+      grupo: firstExpense?.grupo || '',
+      valor: 0,
+      banco: defaultActiveBank?.nome || 'SICREDI',
+      bancoId: defaultActiveBank?.id || '',
+      bancoDestino: '',
+      bancoDestinoId: '',
+      formaPagamento: defaultActiveBank?.tipoConta === 'Caixa Físico' ? 'DINHEIRO' : 'PIX',
+      documento: '',
+      status: 'Conciliado',
+      origem: 'manual',
+      observacoes: '',
+      camposExtras: {},
+    };
+  });
 
   // Extrato Bancário (Importação & Staging Editável)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -732,6 +759,146 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
     onSaveEntry(saved);
     setEntryModalError(null);
     setIsEntryModalOpen(false);
+  };
+
+  // Handlers da Aba Dedicada "Lançar (Despesa / Receita / Transferência)"
+  const handleSwitchQuickLaunchTipo = (nextTipo: AccountPlanType) => {
+    const firstAcc =
+      accountsPlan.find((a) => a.ativo && a.tipo === nextTipo) ||
+      accountsPlan.find((a) => a.tipo === nextTipo);
+    const chosenOrigin =
+      (quickLaunchForm.bancoId ? bankAccounts.find((b) => b.id === quickLaunchForm.bancoId) : undefined) ||
+      defaultActiveBank;
+    const fallbackDest =
+      nextTipo === 'transferencia'
+        ? bankAccounts.find((b) => b.ativo && b.id !== chosenOrigin?.id) ||
+          bankAccounts.find((b) => b.id !== chosenOrigin?.id)
+        : undefined;
+
+    setQuickLaunchError(null);
+    setQuickLaunchForm((prev) => ({
+      ...prev,
+      tipo: nextTipo,
+      contaId: firstAcc?.id || '',
+      contaNome: firstAcc?.nome || '',
+      grupo: firstAcc?.grupo || '',
+      descricao:
+        nextTipo === 'transferencia' && !prev.descricao.trim()
+          ? 'TRANSFERÊNCIA ENTRE CONTAS'
+          : prev.tipo === 'transferencia' && prev.descricao === 'TRANSFERÊNCIA ENTRE CONTAS'
+          ? ''
+          : prev.descricao,
+      banco: chosenOrigin?.nome || prev.banco || 'CAIXA',
+      bancoId: chosenOrigin?.id || prev.bancoId || '',
+      bancoDestino:
+        nextTipo === 'transferencia' ? prev.bancoDestino || fallbackDest?.nome || '' : '',
+      bancoDestinoId:
+        nextTipo === 'transferencia' ? prev.bancoDestinoId || fallbackDest?.id || '' : '',
+      formaPagamento:
+        nextTipo === 'transferencia'
+          ? 'TRANSFERÊNCIA'
+          : chosenOrigin?.tipoConta === 'Caixa Físico'
+          ? 'DINHEIRO'
+          : prev.formaPagamento === 'TRANSFERÊNCIA'
+          ? 'PIX'
+          : prev.formaPagamento || 'PIX',
+    }));
+  };
+
+  const handleSaveQuickLaunch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setQuickLaunchError(null);
+    if (!quickLaunchForm.descricao.trim()) {
+      setQuickLaunchError('Informe a descrição do lançamento.');
+      return;
+    }
+    if ((Number(quickLaunchForm.valor) || 0) <= 0) {
+      setQuickLaunchError('Informe um valor maior que zero.');
+      return;
+    }
+
+    const acc = accountsPlan.find((a) => a.id === quickLaunchForm.contaId);
+    const finalTipo: AccountPlanType = acc?.tipo || quickLaunchForm.tipo;
+    const matchedBank =
+      (quickLaunchForm.bancoId ? bankAccounts.find((b) => b.id === quickLaunchForm.bancoId) : undefined) ||
+      bankAccounts.find((b) => b.nome.trim().toUpperCase() === (quickLaunchForm.banco || '').trim().toUpperCase());
+    const matchedDestBank =
+      (quickLaunchForm.bancoDestinoId
+        ? bankAccounts.find((b) => b.id === quickLaunchForm.bancoDestinoId)
+        : undefined) ||
+      bankAccounts.find(
+        (b) => b.nome.trim().toUpperCase() === (quickLaunchForm.bancoDestino || '').trim().toUpperCase()
+      );
+
+    const originName = (matchedBank?.nome || quickLaunchForm.banco || 'CAIXA').trim().toUpperCase();
+    const originId = matchedBank?.id || quickLaunchForm.bancoId || '';
+    const destName = (matchedDestBank?.nome || quickLaunchForm.bancoDestino || '').trim().toUpperCase();
+    const destId = matchedDestBank?.id || quickLaunchForm.bancoDestinoId || '';
+
+    if (finalTipo === 'transferencia') {
+      if (!destName && !destId) {
+        setQuickLaunchError('Informe para qual conta bancária de destino o dinheiro vai.');
+        return;
+      }
+      if ((originId && destId && originId === destId) || originName === destName) {
+        setQuickLaunchError('A conta de destino deve ser diferente da conta de origem.');
+        return;
+      }
+    }
+
+    const saved: FinancialEntry = {
+      id: `fin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      data: quickLaunchForm.data || todayStr,
+      descricao: quickLaunchForm.descricao.trim().toUpperCase(),
+      tipo: finalTipo,
+      contaId: acc?.id || quickLaunchForm.contaId || '',
+      contaNome: (
+        acc?.nome ||
+        quickLaunchForm.contaNome ||
+        (finalTipo === 'receita'
+          ? 'OUTRAS RECEITAS'
+          : finalTipo === 'transferencia'
+          ? 'TRANSFERÊNCIA ENTRE CONTAS'
+          : 'OUTRAS DESPESAS')
+      ).toUpperCase(),
+      grupo: (acc?.grupo || quickLaunchForm.grupo || 'GERAL').toUpperCase(),
+      valor: Math.abs(Number(quickLaunchForm.valor) || 0),
+      banco: originName,
+      bancoId: originId,
+      bancoDestino: finalTipo === 'transferencia' ? destName : '',
+      bancoDestinoId: finalTipo === 'transferencia' ? destId : '',
+      formaPagamento: (quickLaunchForm.formaPagamento || '').trim().toUpperCase(),
+      documento: (quickLaunchForm.documento || '').trim().toUpperCase(),
+      status: quickLaunchForm.status,
+      origem: 'manual',
+      observacoes: (quickLaunchForm.observacoes || '').trim().toUpperCase(),
+      camposExtras: quickLaunchForm.camposExtras || {},
+      criadoEm: new Date().toISOString(),
+    };
+
+    onSaveEntry(saved);
+    const tipoLabel =
+      finalTipo === 'receita'
+        ? 'Receita'
+        : finalTipo === 'transferencia'
+        ? 'Transferência'
+        : 'Despesa';
+    setImportFeedback({
+      type: 'success',
+      msg:
+        finalTipo === 'transferencia'
+          ? `${tipoLabel} de ${formatCurrency(saved.valor)} (${originName} → ${destName}) registrada! Os dois saldos foram atualizados.`
+          : `${tipoLabel} "${saved.descricao}" (${formatCurrency(saved.valor)}) lançada em ${originName}!`,
+    });
+
+    setQuickLaunchForm((prev) => ({
+      ...prev,
+      descricao: finalTipo === 'transferencia' ? 'TRANSFERÊNCIA ENTRE CONTAS' : '',
+      valor: 0,
+      documento: '',
+      observacoes: '',
+      camposExtras: {},
+    }));
   };
 
   // Edição Inline Rápida
@@ -1572,10 +1739,29 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
 
           <button
             onClick={() => openNewEntryModal('despesa')}
-            className="px-3.5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-xs shrink-0"
+            className="px-3 py-2 text-xs font-bold text-rose-900 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            title="Registrar nova despesa / saída"
           >
-            <Plus className="w-3.5 h-3.5 text-emerald-400" />
-            Novo Lançamento
+            <TrendingDown className="w-3.5 h-3.5 text-rose-600" />
+            + Despesa
+          </button>
+
+          <button
+            onClick={() => openNewEntryModal('receita')}
+            className="px-3 py-2 text-xs font-bold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            title="Registrar nova receita / entrada"
+          >
+            <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
+            + Receita
+          </button>
+
+          <button
+            onClick={() => openNewEntryModal('transferencia')}
+            className="px-3 py-2 text-xs font-bold text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            title="Registrar transferência entre contas bancárias"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 text-blue-600" />
+            Transferência
           </button>
         </div>
       </div>
@@ -1583,6 +1769,17 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
       {/* Sub-Navegação do Financeiro */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1 bg-neutral-200/70 p-1 rounded-xl w-full sm:w-auto">
+          <button
+            onClick={() => setSubTab('lancar')}
+            className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 ${
+              subTab === 'lancar'
+                ? 'bg-neutral-900 text-white font-bold shadow-2xs'
+                : 'text-neutral-700 hover:text-neutral-950'
+            }`}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Lançamentos (Desp / Rec / Transf)
+          </button>
           <button
             onClick={() => setSubTab('movimentacoes')}
             className={`flex-1 sm:flex-initial px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 ${
@@ -1658,6 +1855,556 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
           >
             <X className="w-3.5 h-3.5" />
           </button>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* SUB-ABA 0: LANÇAMENTO DIRETO (DESPESA, RECEITA E TRANSFERÊNCIA)       */}
+      {/* ===================================================================== */}
+      {subTab === 'lancar' && (
+        <div className="space-y-5">
+          <div className="bg-white border border-neutral-200 rounded-2xl p-4 sm:p-6 shadow-xs space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm sm:text-base font-extrabold text-neutral-950">
+                  Lançamento de Despesa, Receita e Transferência
+                </h2>
+                <p className="text-xs text-neutral-500">
+                  Escolha o tipo de movimentação abaixo para registrar rapidamente no caixa ou conta bancária.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSubTab('movimentacoes')}
+                className="text-xs font-semibold text-neutral-700 hover:text-neutral-950 bg-neutral-100 hover:bg-neutral-200 px-3 py-1.5 rounded-lg self-start sm:self-auto"
+              >
+                Ver todas as movimentações ({entries.length})
+              </button>
+            </div>
+
+            {/* Seletor visual de 3 opções */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleSwitchQuickLaunchTipo('despesa')}
+                className={`p-3.5 rounded-xl border text-left transition-all flex items-center gap-3 ${
+                  quickLaunchForm.tipo === 'despesa'
+                    ? 'border-rose-500 bg-rose-50 ring-2 ring-rose-500/20 shadow-xs'
+                    : 'border-neutral-200 bg-white hover:bg-neutral-50'
+                }`}
+              >
+                <span
+                  className={`p-2 rounded-lg shrink-0 ${
+                    quickLaunchForm.tipo === 'despesa'
+                      ? 'bg-rose-600 text-white'
+                      : 'bg-rose-50 text-rose-600'
+                  }`}
+                >
+                  <TrendingDown className="w-4 h-4" />
+                </span>
+                <div>
+                  <span className="text-xs font-extrabold text-neutral-950 block">Lançar Despesa</span>
+                  <span className="text-[11px] text-neutral-500">Saída / Pagamento / Custo</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSwitchQuickLaunchTipo('receita')}
+                className={`p-3.5 rounded-xl border text-left transition-all flex items-center gap-3 ${
+                  quickLaunchForm.tipo === 'receita'
+                    ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-500/20 shadow-xs'
+                    : 'border-neutral-200 bg-white hover:bg-neutral-50'
+                }`}
+              >
+                <span
+                  className={`p-2 rounded-lg shrink-0 ${
+                    quickLaunchForm.tipo === 'receita'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-emerald-50 text-emerald-600'
+                  }`}
+                >
+                  <TrendingUp className="w-4 h-4" />
+                </span>
+                <div>
+                  <span className="text-xs font-extrabold text-neutral-950 block">Lançar Receita</span>
+                  <span className="text-[11px] text-neutral-500">Entrada / Recebimento</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSwitchQuickLaunchTipo('transferencia')}
+                className={`p-3.5 rounded-xl border text-left transition-all flex items-center gap-3 ${
+                  quickLaunchForm.tipo === 'transferencia'
+                    ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/20 shadow-xs'
+                    : 'border-neutral-200 bg-white hover:bg-neutral-50'
+                }`}
+              >
+                <span
+                  className={`p-2 rounded-lg shrink-0 ${
+                    quickLaunchForm.tipo === 'transferencia'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-blue-50 text-blue-600'
+                  }`}
+                >
+                  <ArrowRightLeft className="w-4 h-4" />
+                </span>
+                <div>
+                  <span className="text-xs font-extrabold text-neutral-950 block">Transferência</span>
+                  <span className="text-[11px] text-neutral-500">Entre contas bancárias</span>
+                </div>
+              </button>
+            </div>
+
+            {quickLaunchError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{quickLaunchError}</span>
+              </div>
+            )}
+
+            {quickLaunchForm.tipo === 'transferencia' && (
+              <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-xs flex items-start gap-2">
+                <ArrowRightLeft className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
+                <span>
+                  <strong>Transferência entre contas:</strong> não entra como Receita nem Despesa no resultado/DRE. O saldo sai da <strong>Conta de Origem</strong> e entra na <strong>Conta de Destino</strong>.
+                </span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveQuickLaunch} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Data *</label>
+                  <input
+                    type="date"
+                    required
+                    value={quickLaunchForm.data}
+                    onChange={(e) => setQuickLaunchForm({ ...quickLaunchForm, data: e.target.value })}
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl font-mono bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Valor (R$) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    value={quickLaunchForm.valor || ''}
+                    placeholder="0,00"
+                    onChange={(e) =>
+                      setQuickLaunchForm({
+                        ...quickLaunchForm,
+                        valor: parseFloat(e.target.value) || 0,
+                      })
+                    }
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl font-mono font-bold text-right bg-white"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block font-semibold text-neutral-700 mb-1">
+                    Conta do Plano de Contas *
+                  </label>
+                  <select
+                    value={quickLaunchForm.contaId}
+                    onChange={(e) => {
+                      const acc = accountsPlan.find((a) => a.id === e.target.value);
+                      if (acc && acc.tipo !== quickLaunchForm.tipo) {
+                        handleSwitchQuickLaunchTipo(acc.tipo);
+                      }
+                      setQuickLaunchForm((prev) => ({
+                        ...prev,
+                        contaId: e.target.value,
+                        contaNome: acc?.nome || '',
+                        grupo: acc?.grupo || '',
+                        tipo: acc?.tipo || prev.tipo,
+                      }));
+                    }}
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white font-medium"
+                  >
+                    <option value="">-- Selecione a conta do Plano de Contas --</option>
+                    {accountsPlan
+                      .filter((a) => a.tipo === quickLaunchForm.tipo)
+                      .map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.codigo} · {a.nome} ({a.grupo})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">
+                    Descrição / Histórico *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={quickLaunchForm.descricao}
+                    onChange={(e) =>
+                      setQuickLaunchForm({
+                        ...quickLaunchForm,
+                        descricao: e.target.value.toUpperCase(),
+                      })
+                    }
+                    placeholder={
+                      quickLaunchForm.tipo === 'transferencia'
+                        ? 'EX: TRANSFERÊNCIA DE CAIXA PARA SICREDI'
+                        : quickLaunchForm.tipo === 'receita'
+                        ? 'EX: RECEBIMENTO CLIENTE / LAVAGEM FROTA'
+                        : 'EX: PAGAMENTO FORNECEDOR / ENERGIA / INSUMOS'
+                    }
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase bg-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-semibold text-neutral-700">
+                        {quickLaunchForm.tipo === 'transferencia'
+                          ? 'Conta de Origem (Sai de) *'
+                          : 'Banco / Caixa *'}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => openNewBankModal(false)}
+                        className="text-[11px] font-bold text-blue-700 hover:underline flex items-center gap-0.5"
+                      >
+                        <Plus className="w-3 h-3" /> Nova
+                      </button>
+                    </div>
+                    <select
+                      value={quickLaunchForm.bancoId || '__legacy__'}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setQuickLaunchError(null);
+                        if (val === '__legacy__') {
+                          setQuickLaunchForm({ ...quickLaunchForm, bancoId: '', banco: '' });
+                        } else {
+                          const b = bankAccounts.find((x) => x.id === val);
+                          if (b) {
+                            setQuickLaunchForm({ ...quickLaunchForm, bancoId: b.id, banco: b.nome });
+                          }
+                        }
+                      }}
+                      className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white uppercase font-semibold"
+                    >
+                      {bankAccounts.map((b) => {
+                        const bal = bankBalancesMap.get(b.id)?.saldoAtual ?? b.saldoInicial;
+                        return (
+                          <option key={b.id} value={b.id}>
+                            {b.nome} ({formatCurrency(bal)})
+                          </option>
+                        );
+                      })}
+                      <option value="__legacy__">-- Outro (Digitar) --</option>
+                    </select>
+                    {!quickLaunchForm.bancoId && (
+                      <input
+                        type="text"
+                        value={quickLaunchForm.banco}
+                        onChange={(e) =>
+                          setQuickLaunchForm({
+                            ...quickLaunchForm,
+                            banco: e.target.value.toUpperCase(),
+                          })
+                        }
+                        placeholder="NOME DO BANCO / CAIXA..."
+                        className="mt-2 w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase"
+                      />
+                    )}
+                  </div>
+
+                  {quickLaunchForm.tipo === 'transferencia' ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="font-semibold text-blue-800">
+                          Conta de Destino (Vai para) *
+                        </label>
+                      </div>
+                      <select
+                        value={
+                          quickLaunchForm.bancoDestinoId ||
+                          (quickLaunchForm.bancoDestino ? '__legacy__' : '')
+                        }
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setQuickLaunchError(null);
+                          if (val === '' || val === '__legacy__') {
+                            setQuickLaunchForm({
+                              ...quickLaunchForm,
+                              bancoDestinoId: '',
+                              bancoDestino: '',
+                            });
+                          } else {
+                            const b = bankAccounts.find((x) => x.id === val);
+                            if (b) {
+                              setQuickLaunchForm({
+                                ...quickLaunchForm,
+                                bancoDestinoId: b.id,
+                                bancoDestino: b.nome,
+                              });
+                            }
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-blue-400 rounded-xl bg-blue-50 text-blue-950 uppercase font-semibold"
+                      >
+                        <option value="">-- Selecionar Destino * --</option>
+                        {bankAccounts
+                          .filter((b) => b.id !== quickLaunchForm.bancoId)
+                          .map((b) => {
+                            const bal = bankBalancesMap.get(b.id)?.saldoAtual ?? b.saldoInicial;
+                            return (
+                              <option key={b.id} value={b.id}>
+                                {b.nome} ({formatCurrency(bal)})
+                              </option>
+                            );
+                          })}
+                        <option value="__legacy__">-- Outro (Digitar) --</option>
+                      </select>
+                      {!quickLaunchForm.bancoDestinoId && (
+                        <input
+                          type="text"
+                          value={quickLaunchForm.bancoDestino || ''}
+                          onChange={(e) =>
+                            setQuickLaunchForm({
+                              ...quickLaunchForm,
+                              bancoDestino: e.target.value.toUpperCase(),
+                            })
+                          }
+                          placeholder="BANCO DE DESTINO..."
+                          className="mt-2 w-full px-3 py-2 border border-blue-300 rounded-xl uppercase"
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block font-semibold text-neutral-700 mb-1">
+                        Forma de Pagamento
+                      </label>
+                      <select
+                        value={quickLaunchForm.formaPagamento}
+                        onChange={(e) =>
+                          setQuickLaunchForm({
+                            ...quickLaunchForm,
+                            formaPagamento: e.target.value,
+                          })
+                        }
+                        className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white"
+                      >
+                        {PAYMENT_METHODS.map((pm) => (
+                          <option key={pm} value={pm}>
+                            {pm}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">
+                    Nº Documento / NF
+                  </label>
+                  <input
+                    type="text"
+                    value={quickLaunchForm.documento || ''}
+                    onChange={(e) =>
+                      setQuickLaunchForm({
+                        ...quickLaunchForm,
+                        documento: e.target.value.toUpperCase(),
+                      })
+                    }
+                    placeholder="NF-123 / PIX / COMPROVANTE"
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Status</label>
+                  <select
+                    value={quickLaunchForm.status}
+                    onChange={(e) =>
+                      setQuickLaunchForm({
+                        ...quickLaunchForm,
+                        status: e.target.value as 'Conciliado' | 'Pendente',
+                      })
+                    }
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white"
+                  >
+                    <option value="Conciliado">Conciliado (Efetivado no saldo)</option>
+                    <option value="Pendente">Pendente (Previsto)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-neutral-700 mb-1">Observações</label>
+                  <input
+                    type="text"
+                    value={quickLaunchForm.observacoes || ''}
+                    onChange={(e) =>
+                      setQuickLaunchForm({
+                        ...quickLaunchForm,
+                        observacoes: e.target.value.toUpperCase(),
+                      })
+                    }
+                    placeholder="Detalhes adicionais..."
+                    className="w-full px-3 py-2 border border-neutral-300 rounded-xl uppercase bg-white"
+                  />
+                </div>
+              </div>
+
+              {activeCustomFields.length > 0 && (
+                <div className="pt-2 border-t border-neutral-100 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {activeCustomFields.map((cf) => (
+                    <div key={cf.id}>
+                      <label className="block font-semibold text-neutral-700 mb-1">{cf.nome}</label>
+                      {cf.tipo === 'selecao' && cf.opcoes && cf.opcoes.length > 0 ? (
+                        <select
+                          value={quickLaunchForm.camposExtras?.[cf.id] || ''}
+                          onChange={(e) =>
+                            setQuickLaunchForm({
+                              ...quickLaunchForm,
+                              camposExtras: {
+                                ...(quickLaunchForm.camposExtras || {}),
+                                [cf.id]: e.target.value,
+                              },
+                            })
+                          }
+                          className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white"
+                        >
+                          <option value="">-- Selecione --</option>
+                          {cf.opcoes.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type={
+                            cf.tipo === 'numero'
+                              ? 'number'
+                              : cf.tipo === 'data'
+                              ? 'date'
+                              : 'text'
+                          }
+                          value={quickLaunchForm.camposExtras?.[cf.id] || ''}
+                          onChange={(e) =>
+                            setQuickLaunchForm({
+                              ...quickLaunchForm,
+                              camposExtras: {
+                                ...(quickLaunchForm.camposExtras || {}),
+                                [cf.id]: e.target.value,
+                              },
+                            })
+                          }
+                          className="w-full px-3 py-2 border border-neutral-300 rounded-xl bg-white"
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-neutral-100 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-[11px] text-neutral-500">
+                  {quickLaunchForm.bancoId && bankBalancesMap.has(quickLaunchForm.bancoId) && (
+                    <span>
+                      Saldo atual em <strong>{quickLaunchForm.banco}</strong>:{' '}
+                      <strong className="font-mono text-neutral-900">
+                        {formatCurrency(bankBalancesMap.get(quickLaunchForm.bancoId)!.saldoAtual)}
+                      </strong>
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  className={`px-5 py-2.5 text-xs font-bold text-white rounded-xl flex items-center gap-2 shadow-xs transition-colors ${
+                    quickLaunchForm.tipo === 'receita'
+                      ? 'bg-emerald-700 hover:bg-emerald-800'
+                      : quickLaunchForm.tipo === 'transferencia'
+                      ? 'bg-blue-700 hover:bg-blue-800'
+                      : 'bg-rose-700 hover:bg-rose-800'
+                  }`}
+                >
+                  <Check className="w-4 h-4" />
+                  {quickLaunchForm.tipo === 'receita'
+                    ? 'Registrar Receita'
+                    : quickLaunchForm.tipo === 'transferencia'
+                    ? 'Registrar Transferência'
+                    : 'Registrar Despesa'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Últimos Lançamentos Registrados */}
+          {entries.length > 0 && (
+            <div className="bg-white border border-neutral-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-600">
+                  Últimos Lançamentos ({Math.min(entries.length, 6)})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setSubTab('movimentacoes')}
+                  className="text-xs font-semibold text-blue-700 hover:underline"
+                >
+                  Ver tudo →
+                </button>
+              </div>
+              <div className="divide-y divide-neutral-100">
+                {entries.slice(0, 6).map((entry) => (
+                  <div key={entry.id} className="py-2.5 flex items-center justify-between gap-3 text-xs">
+                    <div className="min-w-0">
+                      <span className="font-bold text-neutral-900 block truncate">
+                        {entry.descricao}
+                      </span>
+                      <span className="text-[11px] text-neutral-500 block truncate">
+                        {entry.data.split('-').reverse().join('/')} · {entry.contaNome} ·{' '}
+                        {entry.tipo === 'transferencia'
+                          ? `${entry.banco} → ${entry.bancoDestino || '?'}`
+                          : entry.banco}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className={`font-mono font-bold tabular-nums ${
+                          entry.tipo === 'receita'
+                            ? 'text-emerald-700'
+                            : entry.tipo === 'transferencia'
+                            ? 'text-blue-700'
+                            : 'text-rose-700'
+                        }`}
+                      >
+                        {entry.tipo === 'receita' ? '+' : entry.tipo === 'transferencia' ? '⇄ ' : '-'}
+                        {formatCurrency(entry.valor)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openEditEntryModal(entry)}
+                        className="p-1 text-neutral-500 hover:text-neutral-900 rounded"
+                        title="Editar"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -4173,13 +4920,34 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-neutral-700 mb-1">Tipo *</label>
-                  <select
-                    value={entryForm.tipo}
-                    onChange={(e) => {
-                      const nextTipo = e.target.value as AccountPlanType;
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    {
+                      id: 'despesa' as AccountPlanType,
+                      label: 'Despesa',
+                      activeClass: 'border-rose-500 bg-rose-50 text-rose-800 ring-1 ring-rose-500/30',
+                      Icon: TrendingDown,
+                    },
+                    {
+                      id: 'receita' as AccountPlanType,
+                      label: 'Receita',
+                      activeClass: 'border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-500/30',
+                      Icon: TrendingUp,
+                    },
+                    {
+                      id: 'transferencia' as AccountPlanType,
+                      label: 'Transferência',
+                      activeClass: 'border-blue-500 bg-blue-50 text-blue-800 ring-1 ring-blue-500/30',
+                      Icon: ArrowRightLeft,
+                    },
+                  ] as const
+                ).map(({ id, label, activeClass, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => {
+                      const nextTipo = id;
                       const nextAcc = accountsPlan.find((a) => a.tipo === nextTipo && a.ativo);
                       const fallbackDest =
                         nextTipo === 'transferencia' && !entryForm.bancoDestinoId
@@ -4196,9 +4964,16 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                         descricao:
                           nextTipo === 'transferencia' && !entryForm.descricao.trim()
                             ? 'TRANSFERÊNCIA ENTRE CONTAS'
+                            : entryForm.tipo === 'transferencia' &&
+                              entryForm.descricao === 'TRANSFERÊNCIA ENTRE CONTAS'
+                            ? ''
                             : entryForm.descricao,
                         formaPagamento:
-                          nextTipo === 'transferencia' ? 'TRANSFERÊNCIA' : entryForm.formaPagamento,
+                          nextTipo === 'transferencia'
+                            ? 'TRANSFERÊNCIA'
+                            : entryForm.formaPagamento === 'TRANSFERÊNCIA'
+                            ? 'PIX'
+                            : entryForm.formaPagamento,
                         bancoDestino:
                           nextTipo === 'transferencia'
                             ? entryForm.bancoDestino || fallbackDest?.nome || ''
@@ -4209,19 +4984,19 @@ export const FinanceiroView: React.FC<FinanceiroViewProps> = ({
                             : '',
                       });
                     }}
-                    className={`w-full px-3 py-2 border rounded-xl font-bold focus:outline-none ${
-                      entryForm.tipo === 'receita'
-                        ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                        : entryForm.tipo === 'transferencia'
-                        ? 'border-blue-300 bg-blue-50 text-blue-800'
-                        : 'border-rose-300 bg-rose-50 text-rose-800'
+                    className={`px-3 py-2 rounded-xl border font-bold text-xs flex items-center justify-center gap-1.5 transition-all ${
+                      entryForm.tipo === id
+                        ? activeClass
+                        : 'border-neutral-200 bg-neutral-50 text-neutral-600 hover:bg-neutral-100'
                     }`}
                   >
-                    <option value="receita">Receita (Entrada)</option>
-                    <option value="despesa">Despesa (Saída)</option>
-                    <option value="transferencia">Transferência (Entre Contas)</option>
-                  </select>
-                </div>
+                    <Icon className="w-3.5 h-3.5" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
 
                 <div>
                   <label className="block font-semibold text-neutral-700 mb-1">Data *</label>
